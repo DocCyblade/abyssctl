@@ -401,8 +401,8 @@ DISK_MIN_FREE=10%
 CERT_WARN_DAYS=14
 BACKUP_TIME=03:00
 BACKUP_KEEP=14
-PUSHOVER_USER=uQiRzpo4DXghDmr9QzzfQu27cmVRsG
-PUSHOVER_TOKEN=azGDORePK8gMaC0QOYAMyEEuzJnyUi
+PUSHOVER_USER=exampleUserKey0000000000000000
+PUSHOVER_TOKEN=exampleAppToken000000000000000
 ```
 
 - `KEY=value`, one per line, `\n` endings, UTF-8, no quoting, no comments, no blank lines, at most 64 KiB. A
