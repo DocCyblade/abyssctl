@@ -157,7 +157,8 @@ func (l *ActivityLog) Drop()   // forget the held lines (a quiet health check ru
 1. `Main` builds the real `Env` under `signal.NotifyContext(SIGINT, SIGTERM, SIGHUP)` and calls `Run`.
 2. `Run` builds the tree, parses, runs the exempt commands, then the stamped-build and root checks, as
    [foundation.md](foundation.md) says. Cobra's parse errors are refused (exit 2) with one line and the hint
-   `abyssctl <command> --help`.
+   `abyssctl <command> --help`. A verb group given an unknown subcommand (`abyssctl host bogus`) is refused the
+   same way, with the hint `abyssctl <group> --help`; a bare group (`abyssctl host`) shows its help and exits 0.
 3. **Settings.** Every verb except `version`, help and `host setup` first calls `host.ReadSettings(env.Paths)`.
    `ErrNotSetUp` is refused (exit 2, hint `abyssctl host setup`); a `*SettingsError` exits 4 with its problems and
    the hint "fix /etc/abyssctl/abyssctl.env by hand".
@@ -806,8 +807,8 @@ on an Ubuntu runner.
    `abyssctl host setup` when `abyssctl.env` is missing, and exits 4 with the `SettingsError` problems when it is
    broken;
    settings warnings are shown once. → `TestNotSetUp` (table over `Root()`), `TestSettingsWarnings`
-4. Cobra parse errors (an unknown verb, an unknown flag, a missing argument) exit 2 with one plain line and the
-   help hint, and are not logged. → `TestParseErrors` (table)
+4. Cobra parse errors (an unknown verb, an unknown subcommand of a group, an unknown flag, a missing argument)
+   exit 2 with one plain line and the help hint, and are not logged; a bare group shows its help and exits 0. → `TestParseErrors` (table)
 5. Exit codes: `health check` by hand 0/1/2 and with `--scheduled` 0 for Problems and for a skipped run, 1 for a
    `Check` error, 2 for a Host that is not set up; `status` 0 with Problems, 1 when Docker can't be read and 2 when
    not set up; `list` and `cert list` 2 when not set up; `backup --all` 1 when one Instance fails and 0 when one is
