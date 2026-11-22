@@ -11,8 +11,8 @@ var digestRE = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 func TestCompiledPins_Valid(t *testing.T) {
 	p := buildinfo.CompiledPins()
-	if p.Caddy.Version == "" {
-		t.Error("caddy.version is empty")
+	if !buildinfo.PlainVersion(p.Caddy.Version) {
+		t.Errorf("caddy.version = %q, want a plain MAJOR.MINOR.PATCH (PlainVersion)", p.Caddy.Version)
 	}
 	if !digestRE.MatchString(p.Caddy.Digest) {
 		t.Errorf("caddy.digest = %q, want sha256:<64 hex>", p.Caddy.Digest)
