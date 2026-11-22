@@ -339,13 +339,13 @@ func TestLinkTargets(t *testing.T) {
 	}
 }
 
-// h2s returns a Markdown file's H2 headings in order.
-func h2s(t *testing.T, path string) []string {
+// h2s returns a Markdown file's H2 headings in order. It reports a missing file and returns false.
+func h2s(t *testing.T, path string) ([]string, bool) {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("%s does not exist", path)
-		return nil
+		return nil, false
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -356,14 +356,37 @@ func h2s(t *testing.T, path string) []string {
 			out = append(out, h.text)
 		}
 	}
-	return out
+	return out, true
 }
+
+// sectionsMatch reports whether a file's H2s are the wanted ones, in order.
+func sectionsMatch(got, want []string) bool { return slices.Equal(got, want) }
 
 func checkSections(t *testing.T, rel string, want []string) {
 	t.Helper()
-	got := h2s(t, filepath.Join(repoRoot(t), filepath.FromSlash(rel)))
-	if got != nil && !slices.Equal(got, want) {
+	got, ok := h2s(t, filepath.Join(repoRoot(t), filepath.FromSlash(rel)))
+	if ok && !sectionsMatch(got, want) {
 		t.Errorf("%s H2 sections:\n got %q\nwant %q", rel, got, want)
+	}
+}
+
+func TestSectionsMatch(t *testing.T) {
+	want := []string{"A", "B"}
+	cases := []struct {
+		name string
+		got  []string
+		ok   bool
+	}{
+		{"same, in order", []string{"A", "B"}, true},
+		{"no H2s", nil, false},
+		{"out of order", []string{"B", "A"}, false},
+		{"one missing", []string{"A"}, false},
+		{"one extra", []string{"A", "B", "C"}, false},
+	}
+	for _, c := range cases {
+		if got := sectionsMatch(c.got, want); got != c.ok {
+			t.Errorf("%s: sectionsMatch(%q, %q) = %v, want %v", c.name, c.got, want, got, c.ok)
+		}
 	}
 }
 

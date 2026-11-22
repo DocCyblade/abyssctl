@@ -56,6 +56,31 @@ func TestImportRules(t *testing.T) {
 	}
 }
 
+// TestOnlyImportedBy_CountsTestFiles checks that a "who may import" rule also catches an import from a test file.
+func TestOnlyImportedBy_CountsTestFiles(t *testing.T) {
+	own := &struct{ Path string }{mod}
+	cases := []struct {
+		name string
+		p    pkg
+		want int
+	}{
+		{"package file", pkg{ImportPath: internal("op"), Imports: []string{"github.com/spf13/cobra"}}, 1},
+		{"in-package test file", pkg{ImportPath: internal("op"), TestImports: []string{"github.com/spf13/cobra"}}, 1},
+		{"external test file", pkg{ImportPath: internal("op"), XTestImports: []string{"github.com/spf13/cobra"}}, 1},
+		{"allowed package's test file", pkg{ImportPath: internal("cli"), TestImports: []string{"github.com/spf13/cobra"}}, 0},
+		{"no import", pkg{ImportPath: internal("op"), TestImports: []string{"testing"}}, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			c.p.Module = own
+			g := graph{pkgs: map[string]pkg{c.p.ImportPath: c.p}}
+			if got := onlyImportedBy(under("github.com/spf13/cobra"), internal("cli"))(g); len(got) != c.want {
+				t.Errorf("got %d violations %q, want %d", len(got), got, c.want)
+			}
+		})
+	}
+}
+
 func internal(p string) string { return mod + "/internal/" + p }
 
 // A matcher picks import paths.
@@ -88,7 +113,8 @@ type graph struct {
 // own reports whether a package is the repo's.
 func (g graph) own(p pkg) bool { return p.Module != nil && p.Module.Path == mod }
 
-// onlyImportedBy fails when a package of the repo other than the allowed ones imports a matched package.
+// onlyImportedBy fails when a package of the repo other than the allowed ones imports a matched package, from
+// its own files or its test files. A package's external test importing the package itself is not counted.
 func onlyImportedBy(target matcher, allowed ...string) func(graph) []string {
 	return func(g graph) []string {
 		var bad []string
@@ -96,8 +122,10 @@ func onlyImportedBy(target matcher, allowed ...string) func(graph) []string {
 			if !g.own(p) || slices.Contains(allowed, p.ImportPath) {
 				continue
 			}
-			for _, imp := range p.Imports {
-				if target(imp) {
+			imps := slices.Concat(p.Imports, p.TestImports, p.XTestImports)
+			slices.Sort(imps)
+			for _, imp := range slices.Compact(imps) {
+				if target(imp) && imp != p.ImportPath {
 					bad = append(bad, p.ImportPath+" imports "+imp)
 				}
 			}
