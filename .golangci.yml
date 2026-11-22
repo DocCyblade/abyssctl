@@ -1,0 +1,32 @@
+version: "2"
+linters:
+  default: none
+  enable: [govet, staticcheck, errcheck, ineffassign, unused, forbidigo]
+  settings:
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: ^time\.(Now|Since|Until)$
+          msg: "take the time from the op.Clock you were given (rule: clock)"
+        - pattern: ^os\.(WriteFile|Create)$
+          msg: "write through hostfs.WriteFile or hostfs.Create (rule: write)"
+        - pattern: ^(fmt\.Print(f|ln)?|os\.(Stdout|Stderr)|print|println)$
+          msg: "emit an op.Event; only internal/cli prints (rule: print)"
+  exclusions:
+    rules:
+      - path: ^internal/op/
+        linters: [forbidigo]
+        text: "rule: clock"
+      - path: ^internal/hostfs/
+        linters: [forbidigo]
+        text: "rule: write"
+      - path: ^internal/cli/gendocs/
+        linters: [forbidigo]
+        text: "rule: write"
+      - path: ^internal/cli/
+        linters: [forbidigo]
+        text: "rule: print"
+      - path: (_test\.go$|^journey/|^release/)
+        linters: [forbidigo]
+formatters:
+  enable: [gofumpt]

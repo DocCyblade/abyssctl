@@ -1,9 +1,9 @@
 # Spec: docs
 
 Build step 16 of 16, with a part ticketed with [foundation.md](foundation.md) (step 1), because every later
-spec's acceptance list relies on the reference check and the link check. That part is: `internal/cli/gendocs`,
-`make docs` and `make docs-check`, the `ci.yml` step, `internal/docscheck` with `TestLinks`, `TestHelp_Complete`
-and `TestRootHelp_CoversContract`, `LICENSE`, and the six guides and `CONTRIBUTING.md` as H2 skeletons (the
+spec's acceptance list relies on the reference check and the link check. That part is: `internal/cli/gendocs`
+with `TestHelp_Complete` and `TestRootHelp_CoversContract`, `make docs` and `make docs-check`, the `ci.yml` step,
+`internal/docscheck` with `TestLinks` and the section tests, `LICENSE`, and the six guides and `CONTRIBUTING.md` as H2 skeletons (the
 headings below, no body) so later specs' links to them pass `TestLinks`. The rest lands last, as the final docs
 pass. The [overview](README.md) has the module map and the
 index. Capitalised terms are defined in [GLOSSARY.md](../../GLOSSARY.md).
@@ -131,7 +131,8 @@ they draw on:
 `internal/docscheck` holds test files only and imports only the standard library. It finds the repo root by
 walking up to `go.mod` and runs in `make test` on Linux and macOS, offline:
 
-- **`TestLinks`**: in every `*.md` file of the repo outside `.git/`, `bin/`, `dist/` and any `testdata/`, every
+- **`TestLinks`**: in every `*.md` file of the repo outside `.git/`, `bin/`, `dist/`, any `testdata/` and any folder
+  that holds its own `.git` (a nested worktree or clone), every
   relative link points at a file that exists. Links inside fenced code blocks and inline code spans are not
   links and are not checked. Every `#anchor`, on the same page or another, matches a heading by GitHub's anchor
   rule: take the heading's rendered text (backticks and link syntax removed), lower-case it, keep letters, digits,
