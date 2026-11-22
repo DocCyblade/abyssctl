@@ -39,22 +39,24 @@ func run(args []string, stderr io.Writer) int {
 		return 2
 	}
 
-	pages, err := generate(cli.Root())
-	if err != nil {
+	fail := func(err error) int {
 		_, _ = fmt.Fprintf(stderr, "gendocs: %v\n", err)
 		return 1
 	}
+
+	pages, err := generate(cli.Root())
+	if err != nil {
+		return fail(err)
+	}
 	if *out != "" {
 		if err := write(*out, pages); err != nil {
-			_, _ = fmt.Fprintf(stderr, "gendocs: %v\n", err)
-			return 1
+			return fail(err)
 		}
 		return 0
 	}
 	diffs, err := compare(*check, pages)
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "gendocs: %v\n", err)
-		return 1
+		return fail(err)
 	}
 	if len(diffs) == 0 {
 		return 0

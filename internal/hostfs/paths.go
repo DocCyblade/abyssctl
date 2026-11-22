@@ -39,7 +39,7 @@ func (p Paths) fixed(elem ...string) string {
 	return filepath.Join(append([]string{p.prefix, "/"}, elem...)...)
 }
 
-func (p Paths) under(elem ...string) string {
+func (p Paths) inDataRoot(elem ...string) string {
 	if p.dataRoot == "" {
 		panic("hostfs: a Data root path was asked for before WithDataRoot")
 	}
@@ -60,52 +60,63 @@ func (p Paths) LogrotateRule() string          { return p.fixed("etc", "logrotat
 
 // Under the Data root.
 
-func (p Paths) DataRoot() string                  { return p.under() }
-func (p Paths) InstancesDir() string              { return p.under("instances") }
-func (p Paths) InstanceDir(name string) string    { return p.under("instances", name) }
-func (p Paths) InstanceRecord(name string) string { return p.under("instances", name, "instance.env") }
+func (p Paths) DataRoot() string               { return p.inDataRoot() }
+func (p Paths) InstancesDir() string           { return p.inDataRoot("instances") }
+func (p Paths) InstanceDir(name string) string { return p.inDataRoot("instances", name) }
+func (p Paths) InstanceRecord(name string) string {
+	return filepath.Join(p.InstanceDir(name), "instance.env")
+}
 
-func (p Paths) InstanceCompose(name string) string { return p.under("instances", name, "compose.yaml") }
+func (p Paths) InstanceCompose(name string) string {
+	return filepath.Join(p.InstanceDir(name), "compose.yaml")
+}
 
 func (p Paths) InstanceOutcomes(name string) string {
-	return p.under("instances", name, "outcomes.json")
+	return filepath.Join(p.InstanceDir(name), "outcomes.json")
 }
-func (p Paths) InstanceLock(name string) string { return p.under("instances", name, ".lock") }
-func (p Paths) InstanceData(name string) string { return p.under("instances", name, "data") }
+
+func (p Paths) InstanceLock(name string) string { return filepath.Join(p.InstanceDir(name), ".lock") }
+
+func (p Paths) InstanceData(name string) string { return filepath.Join(p.InstanceDir(name), "data") }
+
 func (p Paths) InstancePreRestore(name string) string {
-	return p.under("instances", name, "data.pre-restore")
+	return filepath.Join(p.InstanceDir(name), "data.pre-restore")
 }
 
 func (p Paths) UpgradeFailedLog(name string, at time.Time) string {
-	return p.under("instances", name, "upgrade-failed-"+Stamp(at)+".log")
+	return filepath.Join(p.InstanceDir(name), "upgrade-failed-"+Stamp(at)+".log")
 }
 
-func (p Paths) CreatingDir(name string) string { return p.under("instances", "."+name+".creating") }
+func (p Paths) CreatingDir(name string) string {
+	return p.inDataRoot("instances", "."+name+".creating")
+}
 
 func (p Paths) CreatingLock(name string) string { return filepath.Join(p.CreatingDir(name), ".lock") }
 
-func (p Paths) RemovingDir(name string) string     { return p.under("instances", "."+name+".removing") }
-func (p Paths) BackupsDir() string                 { return p.under("backups") }
-func (p Paths) InstanceBackups(name string) string { return p.under("backups", name) }
-func (p Paths) RemovedBackupsDir() string          { return p.under("backups", "removed") }
+func (p Paths) RemovingDir(name string) string {
+	return p.inDataRoot("instances", "."+name+".removing")
+}
+func (p Paths) BackupsDir() string                 { return p.inDataRoot("backups") }
+func (p Paths) InstanceBackups(name string) string { return p.inDataRoot("backups", name) }
+func (p Paths) RemovedBackupsDir() string          { return p.inDataRoot("backups", "removed") }
 
 func (p Paths) RemovedBackups(name string, at time.Time) string {
-	return p.under("backups", "removed", name+"-"+Stamp(at))
+	return p.inDataRoot("backups", "removed", name+"-"+Stamp(at))
 }
 
-func (p Paths) ProxyDir() string            { return p.under("proxy") }
-func (p Paths) Caddyfile() string           { return p.under("proxy", "Caddyfile") }
-func (p Paths) ProxyCompose() string        { return p.under("proxy", "compose.yaml") }
-func (p Paths) ProxyEnv() string            { return p.under("proxy", "proxy.env") }
-func (p Paths) SitesDir() string            { return p.under("proxy", "sites") }
-func (p Paths) SiteFile(name string) string { return p.under("proxy", "sites", name+".caddy") }
-func (p Paths) CertsDir() string            { return p.under("proxy", "certs") }
-func (p Paths) CertFile(id string) string   { return p.under("proxy", "certs", id+".crt") }
-func (p Paths) KeyFile(id string) string    { return p.under("proxy", "certs", id+".key") }
-func (p Paths) CaddyData() string           { return p.under("proxy", "caddy-data") }
-func (p Paths) CaddyConfig() string         { return p.under("proxy", "caddy-config") }
-func (p Paths) StateDir() string            { return p.under("state") }
-func (p Paths) HealthState() string         { return p.under("state", "health.json") }
-func (p Paths) MotdText() string            { return p.under("state", "motd.txt") }
-func (p Paths) HostLock() string            { return p.under("state", "host.lock") }
-func (p Paths) HealthLock() string          { return p.under("state", "health.lock") }
+func (p Paths) ProxyDir() string            { return p.inDataRoot("proxy") }
+func (p Paths) Caddyfile() string           { return p.inDataRoot("proxy", "Caddyfile") }
+func (p Paths) ProxyCompose() string        { return p.inDataRoot("proxy", "compose.yaml") }
+func (p Paths) ProxyEnv() string            { return p.inDataRoot("proxy", "proxy.env") }
+func (p Paths) SitesDir() string            { return p.inDataRoot("proxy", "sites") }
+func (p Paths) SiteFile(name string) string { return p.inDataRoot("proxy", "sites", name+".caddy") }
+func (p Paths) CertsDir() string            { return p.inDataRoot("proxy", "certs") }
+func (p Paths) CertFile(id string) string   { return p.inDataRoot("proxy", "certs", id+".crt") }
+func (p Paths) KeyFile(id string) string    { return p.inDataRoot("proxy", "certs", id+".key") }
+func (p Paths) CaddyData() string           { return p.inDataRoot("proxy", "caddy-data") }
+func (p Paths) CaddyConfig() string         { return p.inDataRoot("proxy", "caddy-config") }
+func (p Paths) StateDir() string            { return p.inDataRoot("state") }
+func (p Paths) HealthState() string         { return p.inDataRoot("state", "health.json") }
+func (p Paths) MotdText() string            { return p.inDataRoot("state", "motd.txt") }
+func (p Paths) HostLock() string            { return p.inDataRoot("state", "host.lock") }
+func (p Paths) HealthLock() string          { return p.inDataRoot("state", "health.lock") }

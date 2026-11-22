@@ -62,55 +62,55 @@ func Create(path string, perm fs.FileMode) (*Pending, error) {
 }
 
 // Write appends b to the temp file.
-func (f *Pending) Write(b []byte) (int, error) {
-	if f.file == nil {
+func (p *Pending) Write(b []byte) (int, error) {
+	if p.file == nil {
 		return 0, errDone
 	}
-	return f.file.Write(b)
+	return p.file.Write(b)
 }
 
 // Path returns the temp file's path, so the writer can read it back before Commit.
-func (f *Pending) Path() string { return f.tmp }
+func (p *Pending) Path() string { return p.tmp }
 
 // Commit fsyncs the temp file, sets its mode to exactly perm, renames it over the target and fsyncs the folder.
 // On an error before the rename the temp file is removed and the target is untouched.
-func (f *Pending) Commit() error {
-	if f.file == nil {
+func (p *Pending) Commit() error {
+	if p.file == nil {
 		return errDone
 	}
-	if err := f.finish(); err != nil {
-		f.Abort()
-		return fmt.Errorf("write %s: %w", f.target, err)
+	if err := p.finish(); err != nil {
+		p.Abort()
+		return fmt.Errorf("write %s: %w", p.target, err)
 	}
-	f.file = nil
-	if err := syncDir(filepath.Dir(f.target)); err != nil {
-		return fmt.Errorf("write %s: sync folder: %w", f.target, err)
+	p.file = nil
+	if err := syncDir(filepath.Dir(p.target)); err != nil {
+		return fmt.Errorf("write %s: sync folder: %w", p.target, err)
 	}
 	return nil
 }
 
-func (f *Pending) finish() error {
-	if err := f.file.Sync(); err != nil {
+func (p *Pending) finish() error {
+	if err := p.file.Sync(); err != nil {
 		return err
 	}
 	// Chmod, not the create mode, so the umask never loosens or tightens perm.
-	if err := f.file.Chmod(f.perm); err != nil {
+	if err := p.file.Chmod(p.perm); err != nil {
 		return err
 	}
-	if err := f.file.Close(); err != nil {
+	if err := p.file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(f.tmp, f.target)
+	return os.Rename(p.tmp, p.target)
 }
 
 // Abort removes the temp file. It is safe after Commit and safe to call twice.
-func (f *Pending) Abort() {
-	if f.file == nil {
+func (p *Pending) Abort() {
+	if p.file == nil {
 		return
 	}
-	_ = f.file.Close()
-	_ = os.Remove(f.tmp)
-	f.file = nil
+	_ = p.file.Close()
+	_ = os.Remove(p.tmp)
+	p.file = nil
 }
 
 func syncDir(dir string) error {

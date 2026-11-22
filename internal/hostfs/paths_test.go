@@ -50,33 +50,33 @@ var fixedCases = []pathCase{
 var dataRootCases = []pathCase{
 	{"DataRoot", hostfs.Paths.DataRoot, "/srv/abyssctl"},
 	{"InstancesDir", hostfs.Paths.InstancesDir, "/srv/abyssctl/instances"},
-	{"InstanceDir", name(hostfs.Paths.InstanceDir), "/srv/abyssctl/instances/budget"},
-	{"InstanceRecord", name(hostfs.Paths.InstanceRecord), "/srv/abyssctl/instances/budget/instance.env"},
-	{"InstanceCompose", name(hostfs.Paths.InstanceCompose), "/srv/abyssctl/instances/budget/compose.yaml"},
-	{"InstanceOutcomes", name(hostfs.Paths.InstanceOutcomes), "/srv/abyssctl/instances/budget/outcomes.json"},
-	{"InstanceLock", name(hostfs.Paths.InstanceLock), "/srv/abyssctl/instances/budget/.lock"},
-	{"InstanceData", name(hostfs.Paths.InstanceData), "/srv/abyssctl/instances/budget/data"},
-	{"InstancePreRestore", name(hostfs.Paths.InstancePreRestore), "/srv/abyssctl/instances/budget/data.pre-restore"},
+	{"InstanceDir", name(hostfs.Paths.InstanceDir), "/srv/abyssctl/instances/kids"},
+	{"InstanceRecord", name(hostfs.Paths.InstanceRecord), "/srv/abyssctl/instances/kids/instance.env"},
+	{"InstanceCompose", name(hostfs.Paths.InstanceCompose), "/srv/abyssctl/instances/kids/compose.yaml"},
+	{"InstanceOutcomes", name(hostfs.Paths.InstanceOutcomes), "/srv/abyssctl/instances/kids/outcomes.json"},
+	{"InstanceLock", name(hostfs.Paths.InstanceLock), "/srv/abyssctl/instances/kids/.lock"},
+	{"InstanceData", name(hostfs.Paths.InstanceData), "/srv/abyssctl/instances/kids/data"},
+	{"InstancePreRestore", name(hostfs.Paths.InstancePreRestore), "/srv/abyssctl/instances/kids/data.pre-restore"},
 	{
-		"UpgradeFailedLog", func(p hostfs.Paths) string { return p.UpgradeFailedLog("budget", at) },
-		"/srv/abyssctl/instances/budget/upgrade-failed-20261117T080004Z.log",
+		"UpgradeFailedLog", func(p hostfs.Paths) string { return p.UpgradeFailedLog("kids", at) },
+		"/srv/abyssctl/instances/kids/upgrade-failed-20261117T080004Z.log",
 	},
-	{"CreatingDir", name(hostfs.Paths.CreatingDir), "/srv/abyssctl/instances/.budget.creating"},
-	{"CreatingLock", name(hostfs.Paths.CreatingLock), "/srv/abyssctl/instances/.budget.creating/.lock"},
-	{"RemovingDir", name(hostfs.Paths.RemovingDir), "/srv/abyssctl/instances/.budget.removing"},
+	{"CreatingDir", name(hostfs.Paths.CreatingDir), "/srv/abyssctl/instances/.kids.creating"},
+	{"CreatingLock", name(hostfs.Paths.CreatingLock), "/srv/abyssctl/instances/.kids.creating/.lock"},
+	{"RemovingDir", name(hostfs.Paths.RemovingDir), "/srv/abyssctl/instances/.kids.removing"},
 	{"BackupsDir", hostfs.Paths.BackupsDir, "/srv/abyssctl/backups"},
-	{"InstanceBackups", name(hostfs.Paths.InstanceBackups), "/srv/abyssctl/backups/budget"},
+	{"InstanceBackups", name(hostfs.Paths.InstanceBackups), "/srv/abyssctl/backups/kids"},
 	{"RemovedBackupsDir", hostfs.Paths.RemovedBackupsDir, "/srv/abyssctl/backups/removed"},
 	{
-		"RemovedBackups", func(p hostfs.Paths) string { return p.RemovedBackups("budget", at) },
-		"/srv/abyssctl/backups/removed/budget-20261117T080004Z",
+		"RemovedBackups", func(p hostfs.Paths) string { return p.RemovedBackups("kids", at) },
+		"/srv/abyssctl/backups/removed/kids-20261117T080004Z",
 	},
 	{"ProxyDir", hostfs.Paths.ProxyDir, "/srv/abyssctl/proxy"},
 	{"Caddyfile", hostfs.Paths.Caddyfile, "/srv/abyssctl/proxy/Caddyfile"},
 	{"ProxyCompose", hostfs.Paths.ProxyCompose, "/srv/abyssctl/proxy/compose.yaml"},
 	{"ProxyEnv", hostfs.Paths.ProxyEnv, "/srv/abyssctl/proxy/proxy.env"},
 	{"SitesDir", hostfs.Paths.SitesDir, "/srv/abyssctl/proxy/sites"},
-	{"SiteFile", name(hostfs.Paths.SiteFile), "/srv/abyssctl/proxy/sites/budget.caddy"},
+	{"SiteFile", name(hostfs.Paths.SiteFile), "/srv/abyssctl/proxy/sites/kids.caddy"},
 	{"CertsDir", hostfs.Paths.CertsDir, "/srv/abyssctl/proxy/certs"},
 	{
 		"CertFile", func(p hostfs.Paths) string { return p.CertFile("0123456789ab") },
@@ -96,7 +96,7 @@ var dataRootCases = []pathCase{
 }
 
 func name(m func(hostfs.Paths, string) string) func(hostfs.Paths) string {
-	return func(p hostfs.Paths) string { return m(p, "budget") }
+	return func(p hostfs.Paths) string { return m(p, "kids") }
 }
 
 func withDataRoot(t *testing.T, p hostfs.Paths, dir string) hostfs.Paths {

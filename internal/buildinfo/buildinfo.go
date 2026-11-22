@@ -17,7 +17,7 @@ import (
 // Set with -ldflags "-X github.com/DocCyblade/abyssctl/internal/buildinfo.<Name>=<value>".
 // The defaults are the release values, except Version and Commit, which every release build stamps.
 var (
-	Version     = "0.0.0-dev"                            // SemVer without a leading "v", e.g. "0.1.0"
+	Version     = Unstamped                              // SemVer without a leading "v", e.g. "0.1.0"
 	Commit      = "unknown"                              // full git commit hash
 	ActualRepo  = "docker.io/actualbudget/actual-server" // image name, registry host included
 	CaddyRepo   = "docker.io/library/caddy"
