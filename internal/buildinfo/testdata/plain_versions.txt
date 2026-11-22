@@ -1,0 +1,45 @@
+# The cases for PlainVersion, one "<version> <true|false>" per line. Blank lines and lines starting with "#"
+# are skipped. buildinfo's TestPlainVersion and render's copy of the rule both run this table.
+
+# Plain versions
+0.1.0 true
+26.11.0 true
+0.0.0 true
+2.11.9 true
+10.20.30 true
+1.0.10 true
+
+# A leading v
+v26.11.0 false
+v0.1.0 false
+V1.0.0 false
+
+# A leading zero
+26.011.0 false
+01.0.0 false
+1.00.0 false
+1.0.01 false
+
+# Two or four parts
+26.11 false
+1 false
+26.11.0.1 false
+1.0.0.0 false
+
+# A pre-release
+26.11.0-rc1 false
+0.2.0-dev.3 false
+1.0.0-alpha false
+
+# A build part
+26.11.0+b1 false
+1.0.0+20260101 false
+1.0.0-rc.1+b1 false
+
+# Empty parts and other characters
+1..0 false
+.1.0 false
+1.0. false
+1.0.a false
+1.-1.0 false
+latest false
