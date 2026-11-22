@@ -49,7 +49,7 @@ toolchain is a commit of its own.
 
 ### The dependency rule
 
-`go.mod` requires only `github.com/spf13/cobra`, `modernc.org/sqlite` and `golang.org/x/term`. A new dependency
+`go.mod` requires only `github.com/spf13/cobra`, `modernc.org/sqlite` and `golang.org/x/term`, and their own requirements. A new dependency
 needs a written reason in its owning spec's Decisions section and an entry in the import-rules test
 (`internal/archtest`), which fails `make test` for any module outside the allowed list. Cobra is used only in
 `internal/cli`; [AGENTS.md](AGENTS.md) has the rest of the import and coding rules.

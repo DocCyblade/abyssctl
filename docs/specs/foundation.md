@@ -17,7 +17,7 @@ Lay down the repo that every later spec builds in, and the small shared packages
   exit code, and `abyssctl version`;
 - the Makefile's `tools`, `lint`, `test` and `build` targets, `.golangci.yml`, an import-rules test, and the CI
   workflow that runs them on every push;
-- from [docs.md](docs.md), ticketed with this step: the reference generator `internal/cli/gendocs`, `make docs` and `make docs-check`, the `ci.yml` step, `internal/docscheck` with `TestLinks` and the help tests, `LICENSE`, and H2 skeletons of the six guides and `CONTRIBUTING.md`. docs.md owns
+- from [docs.md](docs.md), ticketed with this step: the reference generator `internal/cli/gendocs` with the help tests, `make docs` and `make docs-check`, the `ci.yml` step, `internal/docscheck` with `TestLinks` and the section tests, `LICENSE`, and H2 skeletons of the six guides and `CONTRIBUTING.md`. docs.md owns
   their content.
 
 When this spec is done, a stamped binary prints its version without root, refuses every other command without
@@ -443,8 +443,9 @@ set to the tag without its `v`, so a local build and a [Release](../../GLOSSARY.
 
 ### `make tools`, `make lint`, `make test`
 
-- `make tools` installs the pinned dev tools into `./bin/` with `GOBIN=$(CURDIR)/bin go install <tool>@<version>`.
-  The versions are Makefile variables (`GOLANGCI_LINT_VERSION` for golangci-lint v2, `GOTESTSUM_VERSION`).
+- `make tools` installs the pinned dev tools into `./bin/` with `GOBIN=$(CURDIR)/bin go install <tool>@<version>`,
+  with `GOTOOLCHAIN` set to the module's toolchain: `go install tool@version` ignores `go.mod`, and golangci-lint
+  refuses a module whose Go version is newer than the one it was built with. The versions are Makefile variables (`GOLANGCI_LINT_VERSION` for golangci-lint v2, `GOTESTSUM_VERSION`).
   [testing.md](testing.md) adds `crane`. Dev tools never enter `go.mod`.
 - `make lint` runs `bin/golangci-lint run`.
 - `make test` runs `bin/gotestsum -- -race ./...` with `CGO_ENABLED=1`, because the race detector needs cgo. Only
@@ -497,7 +498,7 @@ Makefile                        tools, lint, test, build (testing and release ad
 cmd/abyssctl/main.go            umask, then cli.Main
 cmd/abyssctl/main_test.go       the smoke tests
 internal/buildinfo/             buildinfo.go, version.go, pins.json, testdata/plain_versions.txt, tests
-internal/hostfs/                paths.go, write.go, tests
+internal/hostfs/                paths.go, stamp.go, write.go, tests
 internal/op/                    event.go, errors.go, summary.go, clock.go, tests
 internal/cli/                   root.go (tree, checks, exit code), version.go, host.go (placeholder)
 internal/archtest/              archtest_test.go, lint_test.go, testdata/forbid/ (the lint fixture module)
