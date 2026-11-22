@@ -56,6 +56,7 @@ type Record struct {
     ActualVersion  string    // ACTUAL_VERSION, "26.11.0"
     ActualDigest   string    // ACTUAL_IMAGE_DIGEST, "sha256:<64 hex>"
     State          State     // STATE: what the Operator wants, not what Docker reports
+    Internet       bool      // INTERNET: the Instance has Internet access; false leaves the key out
     CreatedAt      time.Time // CREATED_AT, UTC, whole seconds
     ToolVersion    string    // TOOL_VERSION, SemVer without "v"
     UpgradeBackup  string    // UPGRADE_BACKUP: the pre-upgrade Backup id, "" when no Upgrade is under way
@@ -99,6 +100,7 @@ func (s *Store) Stage(spec NewInstance) (*Staged, error)
 
 type NewInstance struct {
     Name, Hostname, ActualVersion, ActualDigest string
+    Internet                                    bool  // create --internet: written as INTERNET=1
     DataOwner                                   Owner // the abyssctl account's actual UID:GID
 }
 
@@ -289,8 +291,8 @@ Invariants:
 ### Writing a record
 
 `Format` writes the known keys in the fixed order of [section 4](#the-instance-record-instanceenv), each as
-`KEY=value` and a `\n`, leaving out `UPGRADE_BACKUP` and `UPGRADE_HEALTHY` when they are unset; then each `Extra`
-key in its order. No comments, no blank lines, no quoting. `Format` validates first and returns the same
+`KEY=value` and a `\n`, leaving out `INTERNET`, `UPGRADE_BACKUP` and `UPGRADE_HEALTHY` when they are unset; then
+each `Extra` key in its order. No comments, no blank lines, no quoting. `Format` validates first and returns the same
 `*RecordError` `Parse` would, so an invalid record is never written. `Parse(name, Format(r))` gives back `r`
 (without `Warnings`), and `Format(Parse(name, b))` gives back `b` for any record the tool wrote.
 
@@ -301,8 +303,9 @@ Store enforces the format; the callers keep to these rules, each tested in its o
 | Key | Set by |
 |---|---|
 | `HOSTNAME` | `Stage`. Only a hand edit changes it later; Store accepts a valid, unique new Hostname, and the next command that acts on the Instance also checks that a Certificate covers it ([proxy.md](proxy.md)) before it regenerates the site file. |
-| `ACTUAL_VERSION`, `ACTUAL_IMAGE_DIGEST` | `Stage`; Upgrade; Restore (the Backup's version and digest, keeping `HOSTNAME` and `STATE`); Rollback, whose Revert sets the `pre-upgrade` Backup's version and digest. Restore and Revert write it through `Put` ([backup.md](backup.md)). |
+| `ACTUAL_VERSION`, `ACTUAL_IMAGE_DIGEST` | `Stage`; Upgrade; Restore (the Backup's version and digest, keeping `HOSTNAME`, `STATE` and `INTERNET`); Rollback, whose Revert sets the `pre-upgrade` Backup's version and digest. Restore and Revert write it through `Put` ([backup.md](backup.md)). |
 | `STATE` | `Stage` (`running`); `start`, `restart`, `stop`. Restore and Upgrade keep it. |
+| `INTERNET` | `Stage` (`create --internet`); `set <name> --internet=on\|off` ([lifecycle.md](lifecycle.md)). Upgrade, Restore and Revert keep the current record's value: a Backup's record never changes it. |
 | `CREATED_AT` | `Stage`, from the Store's `Clock`. Never changed. |
 | `TOOL_VERSION` | `Stage`; and only the commands that create or recreate the container: `start`, `restart`, `upgrade`, `restore` and Rollback. It is the tool version whose generated files the running container was created from. |
 | `UPGRADE_BACKUP` | Upgrade, together with the new version and digest, once the `pre-upgrade` Backup exists; cleared together with `UPGRADE_HEALTHY` when the Upgrade or its Rollback ends. |
@@ -327,8 +330,8 @@ Lifecycle's `create` ([lifecycle.md](lifecycle.md)) holds the Host lock througho
       event, so it reaches the activity log. `Discard` does not move them back.
    4. `EnsureDir(instances/)` and `EnsureDir(instances/.<name>.creating/)`, 0700.
    5. Write `.lock` (empty, 0600) and `instance.env` (0600) with `HOSTNAME`, the version and digest,
-      `STATE=running`, `CREATED_AT` = the `Clock`'s now in UTC to the second, and `TOOL_VERSION` = the Store's
-      `toolVersion`.
+      `STATE=running`, `INTERNET=1` when `spec.Internet`, `CREATED_AT` = the `Clock`'s now in UTC to the second,
+      and `TOOL_VERSION` = the Store's `toolVersion`.
    6. `EnsureDir(data/)`, 0700, then change its owner to `DataOwner`. `data/` starts empty.
 2. **Lifecycle's `Create` locks `Staged.LockPath()`** (`p.CreatingLock(name)`) with `internal/locks`, one of the two
    named exceptions to "modules never lock" ([docker-and-locks.md](docker-and-locks.md)).
@@ -401,6 +404,7 @@ HOSTNAME=kids.example.org
 ACTUAL_VERSION=26.11.0
 ACTUAL_IMAGE_DIGEST=sha256:4f0c…(64 hex)
 STATE=running
+INTERNET=1
 CREATED_AT=2026-11-17T08:00:04Z
 TOOL_VERSION=0.1.0
 UPGRADE_BACKUP=kids-20261117T080004Z-pre-upgrade
@@ -419,6 +423,7 @@ UPGRADE_HEALTHY=1
   | `ACTUAL_VERSION` | yes | a plain stable `X.Y.Z` (`buildinfo.PlainVersion`) |
   | `ACTUAL_IMAGE_DIGEST` | yes | `sha256:` and 64 lowercase hex digits: the digest the image is pinned to |
   | `STATE` | yes | `running` or `stopped` |
+  | `INTERNET` | no | `1`: the Instance has [Internet access](../../GLOSSARY.md) ([ADR 0005](../adr/0005-internet-access-per-instance.md)); left out when it has none |
   | `CREATED_AT` | yes | RFC 3339 in UTC, whole seconds, with `Z` (`2026-11-17T08:00:04Z`) |
   | `TOOL_VERSION` | yes | valid SemVer without `v` (`buildinfo.ValidVersion`) |
   | `UPGRADE_BACKUP` | no | a `pre-upgrade` [Backup](../../GLOSSARY.md) id of this Instance: `<name>-<stamp>-pre-upgrade`, with `<name>` this Instance's name and `<stamp>` a `hostfs.Stamp` ([backup.md](backup.md) owns the id format) |
@@ -534,15 +539,17 @@ All tests are module tests in `internal/store`, on `hostfs.Under(t.TempDir())` w
    ending with `-`. → `TestValidHostname` (table)
 3. `Parse` reads a record with every known key into every `Record` field. → `TestParse_AllKeys`
 4. `Parse` reports each broken rule with the right line: not `KEY=value`, a duplicate key, each missing required
-   key, each known key's bad value, `UPGRADE_HEALTHY` without `UPGRADE_BACKUP`, an `UPGRADE_BACKUP` for another
+   key, each known key's bad value (`INTERNET=0`, `INTERNET=yes` and `INTERNET=` among them), `UPGRADE_HEALTHY`
+   without `UPGRADE_BACKUP`, an `UPGRADE_BACKUP` for another
    Instance or another kind, a control character, a file over 64 KiB; and reports every problem, not just the
    first. → `TestParse_Problems` (table)
 5. An unknown key and a comment line each give a warning, the unknown key is kept in `Extra` in file order, and
    the comment is dropped. → `TestParse_UnknownKeysAndComments`
-6. `Format` writes the known keys in the fixed order, leaves out unset optional keys, puts `Extra` keys after them,
-   writes no comments, and refuses an invalid record. → `TestFormat_OrderAndExtras`, `TestFormat_RefusesInvalid`
-7. `Format(Parse(b))` gives back `b` for a tool-written record, and `Parse(Format(r))` gives back `r`. →
-   `TestRecord_RoundTrip`
+6. `Format` writes the known keys in the fixed order, leaves out unset optional keys (`INTERNET` when `Internet`
+   is false), puts `Extra` keys after them, writes no comments, and refuses an invalid record. →
+   `TestFormat_OrderAndExtras`, `TestFormat_RefusesInvalid`
+7. `Format(Parse(b))` gives back `b` for a tool-written record, and `Parse(Format(r))` gives back `r`, with and
+   without `INTERNET=1`. → `TestRecord_RoundTrip` (table)
 8. `Get` returns the record of a valid Instance, `ErrNoInstance` (matching `fs.ErrNotExist`) for a missing folder,
    and a `*RecordError` (matching `ErrInvalidRecord` and `op.ErrNeedsOperator`, exit 4, hint `fix <file> by hand`)
    for a missing or invalid `instance.env`, with the file, line and problem in its message; the error's
@@ -562,8 +569,9 @@ All tests are module tests in `internal/store`, on `hostfs.Under(t.TempDir())` w
     plain `X.Y.Z`, a malformed digest and a `DataOwner` ID of 0; an empty digest is refused by `Stage` and skipped
     by `CheckNew`. → `TestCheckNew_MatchesStage` (table)
 14. `Stage` builds `.<name>.creating/` (0700) with an empty `.lock` (0600), `instance.env` (0600) holding the
-    Hostname, version, digest, `STATE=running`, the clock's `CREATED_AT` in UTC and the Store's `TOOL_VERSION`,
-    and an empty `data/` (0700); `Get` and `List` do not see it. → `TestStage_Builds`
+    Hostname, version, digest, `STATE=running`, `INTERNET=1` only when `Internet` is set, the clock's `CREATED_AT`
+    in UTC and the Store's `TOOL_VERSION`, and an empty `data/` (0700); `Get` and `List` do not see it. →
+    `TestStage_Builds` (table: with and without Internet access)
 15. `Stage` sets `data/`'s owner to `DataOwner`. → `TestStage_DataOwner` (root only); journey 3 asserts the
     container user owns `data/` (checked by lifecycle.md's journey slice)
 16. `Stage` deletes a leftover `.creating` or `.removing` folder of the same name first; with an existing

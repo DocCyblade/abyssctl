@@ -10,7 +10,7 @@ defined in [GLOSSARY.md](../../GLOSSARY.md).
 ## 1. Purpose
 
 Build the Lifecycle module (`internal/lifecycle`) and its verbs: `create`, `remove`, `remove --orphan`, `list`,
-`status`, `start`, `stop`, `restart`, `logs`, `exec` and `reset-password`. Lifecycle owns:
+`status`, `start`, `stop`, `restart`, `set`, `logs`, `exec` and `reset-password`. Lifecycle owns:
 
 - the order of every step that brings an [Instance](../../GLOSSARY.md) into being, changes what it runs, or takes
   it away, and what is undone when a step fails;
@@ -21,6 +21,8 @@ Build the Lifecycle module (`internal/lifecycle`) and its verbs: `create`, `remo
   [Operator](../../GLOSSARY.md) wants, Docker says what is; `status` shows both;
 - regenerating an Instance's `compose.yaml` and site file on `create`, `start` and `restart`, and writing
   `TOOL_VERSION` when it does;
+- [Internet access](../../GLOSSARY.md): off unless `create --internet` or `set <name> --internet=on` turns it on, and which
+  networks an Instance joins because of it ([ADR 0005](../adr/0005-internet-access-per-instance.md));
 - the refusals every changing command makes on an Instance in a state it must not touch;
 - [Orphans](../../GLOSSARY.md): finding them for `status`, and removing one on `remove --orphan`;
 - `status`, which joins live Docker state with the [Problems](../../GLOSSARY.md) and available updates the
@@ -109,6 +111,7 @@ type CreateRequest struct {
     Hostname string // "" means <Name>.<BaseDomain>
     Version  string // resolved by the CLI through Versions: X.Y.Z
     Digest   string // its "sha256:<64 hex>"; "" only on the interim create --dry-run (Depends on)
+    Internet bool   // --internet: the Instance gets Internet access
 }
 
 // Options of Start and Restart.
@@ -150,6 +153,12 @@ func (l *Lifecycle) Remove(ctx context.Context, name string) (store.Removed, err
 func (l *Lifecycle) PlanRemoveOrphan(ctx context.Context, name string) (op.Summary, error)
 func (l *Lifecycle) RemoveOrphan(ctx context.Context, name string) error
 
+// Set turns the Instance's Internet access on or off: it rewrites INTERNET in the record, re-renders
+// compose.yaml and recreates the container when it is running. Setting the current value is a no-op. Caller
+// holds the Instance lock.
+func (l *Lifecycle) PlanSet(ctx context.Context, name string, internet bool) (op.Summary, error)
+func (l *Lifecycle) Set(ctx context.Context, name string, internet bool) error
+
 // --- reading ---
 
 func (l *Lifecycle) List(ctx context.Context) ([]Entry, error)
@@ -168,6 +177,7 @@ type Live struct {
     Health      string    // "", starting, healthy, unhealthy
     StartedAt   time.Time
     ContainerID string
+    Networks    []string  // the networks the container is attached to, sorted; nil when none
 }
 
 type Report struct {
@@ -185,6 +195,8 @@ type InstanceStatus struct {
                            // "site file missing", "site file names <h>, not <HOSTNAME>"
     WrittenByNewer  string // "" or the newer TOOL_VERSION
     Interrupted     string // "", "upgrade" or "restore"
+    Networks        string // "" or the mismatch: "on abyssctl only; its record says Internet access",
+                           // "on abyssctl-external; its record says no Internet access"
     UpdateAvailable string // "" or the latest stable Actual version, when newer than ACTUAL_VERSION
 }
 
@@ -236,10 +248,15 @@ func (l *Lifecycle) ResetPassword(ctx context.Context, name string, stdio docker
   by hand, and its labelled containers are not Orphans (`remove --orphan` refuses that name too). A valid record with no container is shown as "not created" and
   `start` creates it. A labelled container with no Instance folder is an Orphan, which only `remove --orphan`
   removes.
-- **Generated files are regenerated, never edited.** `create`, `start` and `restart` render `compose.yaml` with
-  `render.InstanceCompose` from the record, the account's IDs (`Deps.Account`) and the `abyssctl` network's
-  subnets (`docker.Network(names.Network).Subnets`), write it through `Store.WriteCompose` (only when the bytes
-  change), and rewrite the site file through `Proxy.AddSite`. `stop`, `remove` and the reading verbs never render.
+- **Generated files are regenerated, never edited.** `create`, `start`, `restart` and `set` render
+  `compose.yaml` with `render.InstanceCompose` from the record, the account's IDs (`Deps.Account`) and the
+  subnets of each network the Instance joins (`docker.Network(…).Subnets`): `abyssctl` (`names.Network`), plus
+  `abyssctl-external` (`names.ExternalNetwork`) when the record has Internet access, in that order. They write it
+  through `Store.WriteCompose` (only when the bytes change); `create`, `start` and `restart` also rewrite the site
+  file through `Proxy.AddSite`. `stop`, `remove` and the reading verbs never render.
+- **Networks follow the record.** An Instance joins `abyssctl` always and `abyssctl-external` only when its
+  record has `INTERNET=1`; it publishes no port. Its container's networks change only when its `compose.yaml`
+  is applied by `ComposeUp`.
 - **`AddSite` comes before the container starts.** In `create`, `start` and `restart`, the site file is written,
   validated and reloaded before `ComposeUp`, after `Covers` has confirmed a [Certificate](../../GLOSSARY.md)
   covers the Hostname. A Hostname no Certificate covers is refused (exit 2) with the cause `proxy.ErrNotCovered`
@@ -251,7 +268,7 @@ func (l *Lifecycle) ResetPassword(ctx context.Context, name string, stdio docker
   `toolVersion`, which is `buildinfo.Version`); a `create` that fails is discarded, so no record keeps it without
   a container. `start` and `restart` write `TOOL_VERSION=Deps.Version` only after `ComposeUp` returns without
   error. Nothing else in Lifecycle writes it.
-- **Guards on every changing verb.** `start`, `restart`, `stop`, `remove` and `reset-password` read the record
+- **Guards on every changing verb.** `start`, `restart`, `stop`, `set`, `remove` and `reset-password` read the record
   with `Store.Get` and refuse, in this order:
   1. a `TOOL_VERSION` newer than `Deps.Version` (`buildinfo.CompareVersions`): `op.NeedsOperator("<name> was
      last changed by Abyss <v>, newer than this binary (<mine>)", "install abyssctl <v> or newer")` (exit 4).
@@ -271,8 +288,12 @@ func (l *Lifecycle) ResetPassword(ctx context.Context, name string, stdio docker
 - **Missing Instance.** Every verb that takes a name returns Store's `ErrNoInstance` (matching `fs.ErrNotExist`)
   for a name with no folder; [cli.md](cli.md) shows it as "no such Instance". A command that waited for the lock
   of an Instance that was removed meanwhile gets the same from the Locker.
-- **Account and network.** A missing `abyssctl` account (`host.ErrNoAccount`) or `abyssctl` network is refused
-  (exit 2) with the hint `abyssctl host setup`; so is a Proxy that is not set up (`proxy.Status().SetUp` false).
+- **Account and networks.** A missing `abyssctl` account (`host.ErrNoAccount`) or `abyssctl` network is refused
+  (exit 2) with the hint `abyssctl host setup`; so is a missing `abyssctl-external` network for an Instance with
+  Internet access, and a Proxy that is not set up (`proxy.Status().SetUp` false). In `create`, `start`,
+  `restart` and `set`, each network the record says the Instance joins and its container is not on yet (all of
+  them when there is no container) is refused (exit 2) when its `Free()` is 0: "network <n> has no free address",
+  hint "remove an Instance to free an address".
 - **No [Secret](../../GLOSSARY.md) passes through Lifecycle's events.** `logs`, `exec` and `reset-password` pass
   the container's input and output straight between the terminal and Docker; nothing else sees it and none of it
   is an event field.
@@ -292,12 +313,13 @@ func (l *Lifecycle) ResetPassword(ctx context.Context, name string, stdio docker
 
    | Verb | Arguments and flags | Prompt | `--dry-run` | `--json` |
    |---|---|---|---|---|
-   | `create` | `<name> [--hostname H] [--version X.Y.Z]` | none | yes | no |
+   | `create` | `<name> [--hostname H] [--version X.Y.Z] [--internet]` | none | yes | no |
    | `remove` | `<name>`, `--yes` | type the name | yes | no |
    | `remove --orphan` | `<name>`, `--yes` | type the name | yes | no |
    | `start` | `<name>` | none | no | no |
    | `stop` | `<name>`, `--yes` | y/N | yes | no |
    | `restart` | `<name>`, `--yes` | y/N | yes | no |
+   | `set` | `<name> --internet=on\|off`, `--yes` | y/N | yes | no |
    | `list` | | | | yes |
    | `status` | | | | yes |
    | `logs` | `<name>` or `proxy`, `-f`/`--follow`, `--tail N` (default: all) | | | |
@@ -313,7 +335,7 @@ func (l *Lifecycle) ResetPassword(ctx context.Context, name string, stdio docker
    | `create` | Host (and `Create` takes the new Instance's lock itself) |
    | `remove`, `start`, `restart` | Host, then Instance |
    | `remove --orphan` | Host |
-   | `stop`, `reset-password` | Instance |
+   | `stop`, `set`, `reset-password` | Instance |
    | `list`, `status`, `logs`, `exec`, every `--dry-run` | none |
 
    `start` and `restart` take the Host lock because they may rewrite the site file, and the Host lock guards the
@@ -341,12 +363,13 @@ func (l *Lifecycle) ResetPassword(ctx context.Context, name string, stdio docker
 4. `Store.CheckNew(NewInstance{Name, Hostname, Version, Digest, DataOwner})`: name, an existing Instance, the
    Hostname and its uniqueness, the version and digest. Its refusals pass through.
 5. `Proxy.Covers(hostname)`: not covered → refused with `ErrNotCovered` and the `cert install` hint.
-6. `Docker.Network(names.Network)`: missing → refused, hint `abyssctl host setup`. Its subnets become
-   `render.Instance.TrustedProxies`.
+6. `Docker.Network(names.Network)`, and with `r.Internet` also `Docker.Network(names.ExternalNetwork)`: a
+   missing one → refused, hint `abyssctl host setup`; one with `Free() == 0` → refused ("network <n> has no free
+   address"). Their subnets, in that order, become `render.Instance.TrustedProxies`.
 7. `Docker.Image(record image)`: whether a pull is needed.
 
 The panel: title "Create kids"; rows Hostname, Actual (`26.11.0`), Certificate (its id, from `Covers`), Data
-(`instances/kids/`); steps "pull docker.io/actualbudget/actual-server:26.11.0" (only when not local), "move the
+(`instances/kids/`), Internet access (`no (pass --internet for bank sync)`, or `yes`); steps "pull docker.io/actualbudget/actual-server:26.11.0" (only when not local), "move the
 old Backups in backups/kids/ to backups/removed/kids-<stamp>/" (only when `Store.OldBackups(name)` finds that
 folder, left by an earlier Instance of the name), "write the Instance folder", "add the site and reload the Proxy",
 "start kids and wait up to 5 min for it to be healthy".
@@ -356,13 +379,13 @@ folder, left by an earlier Instance of the name), "write the Instance folder", "
 1. **Pull** `Record.Image(ActualRepo)` (`<repo>:<version>@<digest>`) if it is not local. `ErrNotFound` →
    refused ("Actual 26.11.0 with that digest is not available"); any other failure → exit 1. Nothing is written
    yet. Event `pull image=…`.
-2. **Stage**: `Store.Stage(spec)`. From here on, any failure runs the teardown below. When `Stage` moved an old
+2. **Stage**: `Store.Stage(spec)`, with `NewInstance.Internet = r.Internet`. From here on, any failure runs the teardown below. When `Stage` moved an old
    `backups/<name>/` aside (`Staged.BackupsMovedTo()`), event `backups_moved instance=kids
    to=backups/removed/kids-20261117T080000Z/`; the teardown does not move them back.
 3. **Lock**: `Locker.Acquire(ctx, Paths.CreatingLock(name), locks.DefaultWait)`. The lock file is new, so the
    wait is never used. After `Commit` the same flock is the Instance lock, so a command waiting for it waits for
    the whole `create`.
-4. **Compose file**: `Staged.WriteCompose(render.InstanceCompose(Instance{Name, Image, UID, GID,
+4. **Compose file**: `Staged.WriteCompose(render.InstanceCompose(Instance{Name, Image, UID, GID, Internet,
    TrustedProxies}))`.
 5. **Commit**: `Staged.Commit()`. Event `created instance=kids hostname=kids.budget.example.com version=26.11.0`.
 6. **Site**: `Proxy.AddSite(ctx, name, hostname)`, which starts a stopped Proxy first and validates and reloads.
@@ -384,8 +407,9 @@ deletes, or a committed Instance whose container never started. `status` shows t
 ### `start`
 
 1. Guards (above), on `Store.Get(name)`.
-2. `Proxy.Status` set up; `Proxy.Covers(record.Hostname)`; `Deps.Account()`; `Docker.Network`. Refusals as in
-   `create`. A Hostname changed by hand in the record is checked here, before anything changes.
+2. `Proxy.Status` set up; `Proxy.Covers(record.Hostname)`; `Deps.Account()`; `Docker.Network` of each network
+   the record says the Instance joins, with the free-address check for each one the container is not on yet
+   (`Docker.Container`'s `Networks`). Refusals as in `create`. A Hostname changed by hand in the record is checked here, before anything changes.
 3. Pull the pinned image if it is not local (for example after a `docker image rm` by hand). Event `pull`.
    `ErrNotFound` → refused (exit 2) as in `create`; any other failure → exit 1. Either way nothing is changed.
 4. `Store.Put` with `STATE=running` (only when it changes), so the Health check counts the Instance as wanted up
@@ -421,6 +445,37 @@ Proxy"; the warning "kids runs as <old> and is recreated as <new>" when the acco
 No file is rendered and `TOOL_VERSION` is not changed. `PlanStop` of an Instance whose record says stopped and whose
 container is not running returns `NoOp`. The panel's warning: "kids is unreachable until abyssctl start kids".
 
+### `set`
+
+`set <name> --internet=on|off` turns the Instance's Internet access on or off. `PlanSet` and `Set` share steps
+1–3:
+
+1. Guards.
+2. The record's Internet access already equals the value asked for: `PlanSet` returns `NoOp` and `Set` returns
+   nil having changed nothing.
+3. `Deps.Account()`; `Docker.Network(names.Network)`, plus `Docker.Network(names.ExternalNetwork)` when turning
+   it on. A missing network is refused (exit 2, hint `abyssctl host setup`); turning it on, an
+   `abyssctl-external` with `Free() == 0` is refused as in `create`.
+
+`Set` then runs:
+
+4. `Store.Put` with `INTERNET=1`, or with `INTERNET` left out for off. Event `internet instance=kids
+   access=on`.
+5. Render `compose.yaml` and `Store.WriteCompose`.
+6. When the container is running, `ComposeUp` with `Wait` and 5 min, without `ForceRecreate`: the changed file
+   recreates the container on its new networks. Event `healthy instance=kids after=12s`. When it is not running,
+   nothing more: a stopped Instance stays stopped and the change takes effect at its next `start`.
+
+`set` changes nothing else: not the data, the Hostname, `STATE`, `TOOL_VERSION` or the site file. A failure after
+step 4 is exit 1 and leaves the record with the new value; `ErrNotHealthy` is "kids was recreated but is not
+healthy after 5 min", hint `abyssctl logs kids`, and `abyssctl restart kids` applies the file again. The panel:
+title "Internet access for kids"; rows Hostname, Internet access (`no → yes`); steps "write INTERNET=1 to
+instance.env" (or "remove INTERNET from instance.env"), "regenerate compose.yaml", and, for a running Instance,
+"recreate kids and wait up to 5 min for it to be healthy"; warnings "kids is unreachable until it is healthy
+again, up to 5 min" for a running Instance, "kids is stopped; the change takes effect at the next abyssctl start
+kids" for one that is not running, and, turning it off, "bank sync, OpenID login and the CORS proxy stop working
+for kids".
+
 ### `remove`
 
 1. Guards. An invalid record is refused (exit 4, hint `fix <file> by hand`): the final Backup needs the record's
@@ -436,7 +491,7 @@ container is not running returns `NoOp`. The panel's warning: "kids is unreachab
    `ComposeUp` (`Wait`, 5 min, on `context.WithoutCancel(ctx)`) if step 3 stopped a `running` or `restarting` one,
    and returns the Backup's error: nothing is changed.
 5. **Site**: `Proxy.RemoveSite(name)` (validate and reload; a missing file is no change).
-6. **Containers**: `ComposeDown` of the project. Data is a bind mount and the network is external, so this
+6. **Containers**: `ComposeDown` of the project. Data is a bind mount and the networks are external, so this
    removes only the container.
 7. **Folder**: `Store.Remove(name)`: moves `backups/<name>/` (the final Backup included) to
    `backups/removed/<name>-<stamp>/` and deletes `instances/<name>/` with `data/`.
@@ -467,13 +522,13 @@ state.
 
 `Store.List()`, then one `Docker.ListContainers(names.InstanceLabel)` call, matched by the label's value. Each
 entry carries the record (or its `RecordError`) and the live state. Sorted by name. The CLI's table: NAME,
-HOSTNAME, ACTUAL, WANTED, ACTUAL STATE (`running (healthy)`, `exited`, `not created`), and `invalid record` for an
-invalid one. `list` reads no health results and makes no judgement.
+HOSTNAME, ACTUAL, WANTED, ACTUAL STATE (`running (healthy)`, `exited`, `not created`), INTERNET (`yes` or `no`,
+the record's Internet access), and `invalid record` for an invalid one. `list` reads no health results and makes no judgement.
 
 ### `status`
 
-`Status` reads, without a lock: `List`'s entries, `Proxy.Status`, the `abyssctl` network, `Deps.Account()` and
-`Deps.Health`. For each valid Instance it works out:
+`Status` reads, without a lock: `List`'s entries, `Proxy.Status`, the `abyssctl` and `abyssctl-external`
+networks, `Deps.Account()` and `Deps.Health`. For each valid Instance it works out:
 
 - **Agrees**: wanted `running` with the container running and healthy, or wanted `stopped` with the container not
   running. Anything else shows both ("wanted running, actual exited").
@@ -482,8 +537,11 @@ invalid one. `list` reads no health results and makes no judgement.
   covers a hand edit, changed account IDs and a changed subnet), or a site file that is missing or whose
   `render.ParseSite` Hostname is not the record's `HOSTNAME` ("site file missing", "site file names
   old.example.org, not kids.example.org", which covers a hand-edited `HOSTNAME`). The hint is `abyssctl restart
-  <name>`. When the account or the network can't be read, the `compose.yaml` comparison is left out; a site file
-  `ParseSite` refuses counts as differing.
+  <name>`. When the account or a network the Instance joins can't be read, the `compose.yaml` comparison is left
+  out; a site file `ParseSite` refuses counts as differing.
+- **Networks**: when a container exists and `Live.Networks` is not the set its record says (`abyssctl`, plus
+  `abyssctl-external` with Internet access), which one it is on and what the record says ("on abyssctl only; its
+  record says Internet access"), hint `abyssctl restart <name>`. The panel shows it with `!`.
 - **WrittenByNewer**: `TOOL_VERSION` newer than this binary. Read commands still work; `status` shows the
   warning "kids was last changed by Abyss 0.4.0; install abyssctl 0.4.0 or newer".
 - **Interrupted**: `upgrade` when `UPGRADE_BACKUP` is set, else `restore` when `data.pre-restore/` exists
@@ -546,8 +604,8 @@ Lifecycle owns no file format. It decides when the files of others are written:
 
 | File | Format owner | Written by Lifecycle |
 |---|---|---|
-| `instances/<name>/instance.env` | [store.md](store.md) | `Stage` on `create`; `STATE` and `TOOL_VERSION` through `Put` on `start`, `restart`, `stop` |
-| `instances/<name>/compose.yaml` | [render.md](render.md) | `create`, `start`, `restart`, through Store, only when the bytes change |
+| `instances/<name>/instance.env` | [store.md](store.md) | `Stage` on `create`; `STATE` and `TOOL_VERSION` through `Put` on `start`, `restart`, `stop`; `INTERNET` through `Put` on `set` |
+| `instances/<name>/compose.yaml` | [render.md](render.md) | `create`, `start`, `restart`, `set`, through Store, only when the bytes change |
 | `proxy/sites/<name>.caddy` | [render.md](render.md), written by [proxy.md](proxy.md) | `AddSite` on `create`, `start`, `restart`; `RemoveSite` on `remove` and a failed `create` |
 | `backups/<name>/<name>-<stamp>-final.tar.gz` and `.sha256` | [backup.md](backup.md) | the final Backup on `remove` |
 
@@ -557,7 +615,7 @@ Lifecycle owns no file format. It decides when the files of others are written:
 internal/lifecycle/
   lifecycle.go   New, Deps, the seams, CheckVersion, the guards
   create.go      PlanCreate, Create, teardown
-  change.go      Start, Restart, Stop and their plans
+  change.go      Start, Restart, Stop, Set and their plans
   remove.go      Remove, RemoveOrphan and their plans
   read.go        List, Status
   passthrough.go Logs, Exec, ResetPassword
@@ -624,6 +682,10 @@ imports `internal/lifecycle`.
   file and a command may not wait for the Host lock while holding an Instance lock.
 - `remove` checks free space for the final Backup before it stops the Instance, so a full disk refuses with the
   Instance still serving.
+- Internet access is off unless the Operator asks for it ([ADR 0005](../adr/0005-internet-access-per-instance.md)):
+  an Instance needs it only for bank sync, OpenID login and the CORS proxy, and `create`'s panel names it so the
+  Operator sees the choice. `set` changes it without touching the data or the Hostname, and recreates only a
+  running container, so a stopped Instance stays stopped.
 - `exec`, `logs` and `reset-password` pass the container's I/O through unfiltered and unlogged: it is the
   Operator's own data. `exec` logs only that it ran, with its masked command line and exit code. `reset-password` works only on a running Instance on a terminal, because Actual's script
   needs a raw-mode TTY.
@@ -646,10 +708,12 @@ imports `internal/lifecycle`.
 - `docs/guides/upgrades.md`: after a Tool update, `status` flags files out of date and the next `start`,
   `restart`, `upgrade` or `restore` of each Instance applies them (`restart <name>` does it at once); an Instance changed by a newer Abyss is refused until that Abyss is installed.
 - `docs/guides/security.md`: `exec` and `logs` show the Instance's own data; `reset-password` signs out existing
-  sessions.
+  sessions; Internet access: off by default, `create --internet` or `set <name> --internet=on` for bank sync,
+  and OpenID login and the CORS proxy (`ACTUAL_CORS_PROXY_ENABLED`) need it too, even with an OpenID provider on
+  the LAN.
 - `docs/guides/teardown.md`: `remove` each Instance first; delete `backups/removed/` by hand.
-- Reference: the pages of `create`, `remove`, `list`, `status`, `start`, `stop`, `restart`, `logs`, `exec` and
-  `reset-password`, from their help text: arguments, flags, the default Hostname, prompts and locks.
+- Reference: the pages of `create`, `remove`, `list`, `status`, `start`, `stop`, `restart`, `set`, `logs`,
+  `exec` and `reset-password`, from their help text: arguments, flags, the default Hostname, prompts and locks.
 
 ## 9. Acceptance list
 
@@ -664,12 +728,13 @@ journey slice is journeys 2 (update from v0.0.1) and 3 (Instance life) and the I
 2. `create` with no `--hostname` uses `<name>.<BaseDomain>`. → `TestCreate_DefaultHostname`
 3. `PlanCreate` and `Create` refuse, with the same error and nothing written, pulled or started: an invalid
    name, an existing Instance, a taken Hostname, an uncovered Hostname (cause `ErrNotCovered`, the `cert install`
-   hint), no Proxy set up, no account and no `abyssctl` network (hint `abyssctl host setup`). → `TestCreate_Refusals`
-   (table)
+   hint), no Proxy set up, no account, no `abyssctl` network, no `abyssctl-external` network with `Internet`
+   (hint `abyssctl host setup`), and either network it would join with `Free() == 0` ("network <n> has no free
+   address"). → `TestCreate_Refusals` (table)
 4. `Create` calls, in order: `Proxy.Status`, `Deps.Account`, `Store.CheckNew`, `Covers`, `Network`, `Image`,
    `Pull` (only when the image is not local; `ErrNotFound` is refused, exit 2, with nothing written), `Stage`,
-   `Acquire` of `CreatingLock`, `WriteCompose` with exactly `render.InstanceCompose`'s bytes for the account's IDs
-   and the network's subnets, `Commit`, `AddSite`, `ComposeUp` with `Wait` and 5 min; the record has
+   `Acquire` of `CreatingLock`, `WriteCompose` with exactly `render.InstanceCompose`'s bytes for the account's IDs,
+   `Internet` and the subnets of `abyssctl`, plus `abyssctl-external` with `Internet`, `Commit`, `AddSite`, `ComposeUp` with `Wait` and 5 min; the record has
    `STATE=running` and `TOOL_VERSION` = the binary's. With an old `backups/<name>/` left by an earlier Instance of
    the name, the panel names the move and `Create` emits `backups_moved` with where they went. →
    `TestCreate_Order`, `TestCreate_PullNotFound`, `TestCreate_OldBackups`
@@ -678,8 +743,9 @@ journey slice is journeys 2 (update from v0.0.1) and 3 (Instance life) and the I
 6. A failure at each step from `Stage` on (including `ErrNotHealthy` and a cancelled context) tears down: the
    project is downed, the site removed and the Instance discarded, leaving no folder, site file or container;
    a teardown error is joined to the result. → `TestCreate_Teardown` (table)
-7. `Start` refuses an uncovered (hand-edited) Hostname, a Proxy that is not set up, a missing account and a
-   missing `abyssctl` network (hint `abyssctl host setup`) before any write; otherwise it writes `STATE=running`,
+7. `Start` refuses an uncovered (hand-edited) Hostname, a Proxy that is not set up, a missing account, a
+   missing `abyssctl` network and, for an Instance with Internet access, a missing `abyssctl-external` network
+   (hint `abyssctl host setup`) before any write; otherwise it writes `STATE=running`,
    regenerates `compose.yaml` and the site file only when their bytes change, calls `AddSite` before `ComposeUp`
    (`Wait`, 5 min, no `ForceRecreate`), and writes `TOOL_VERSION` after it; `ErrNotHealthy` leaves `TOOL_VERSION`
    as it was and gives the `logs` hint. `Options.AfterSite` is called exactly once, after `AddSite` succeeds and
@@ -694,7 +760,7 @@ journey slice is journeys 2 (update from v0.0.1) and 3 (Instance life) and the I
    called once, after `AddSite` and before `ComposeStop`. → `TestRestart`
 10. `Stop` writes `STATE=stopped`, then calls `ComposeStop`, renders nothing and leaves `TOOL_VERSION`;
     `PlanStop` of a stopped Instance is `NoOp`. → `TestStop`
-11. `start`, `restart`, `stop`, `remove` and `reset-password`, and the plans, refuse with nothing changed, in this
+11. `start`, `restart`, `stop`, `set`, `remove` and `reset-password`, and the plans, refuse with nothing changed, in this
     order: a newer `TOOL_VERSION` (exit 4, hint `install abyssctl <v> or newer`), also on a record that is
     otherwise invalid; an invalid record (exit 4, hint `fix <file> by hand`, the message naming the file, line and
     problem); `UPGRADE_BACKUP` set (exit 4, hint `abyssctl upgrade <name>`) and, checked after it, a
@@ -752,7 +818,8 @@ journey slice is journeys 2 (update from v0.0.1) and 3 (Instance life) and the I
     in `internal/cli`
 28. `--dry-run` on `create`, `remove`, `remove --orphan`, `stop` and `restart` prints the panel, takes no lock
     and changes nothing. → `TestLifecycleCmds_DryRun` (table) in `internal/cli`
-29. `list --json` and `status --json` carry `"schema": 1`, snake_case keys and RFC 3339 UTC times. →
+29. `list --json` and `status --json` carry `"schema": 1`, snake_case keys, RFC 3339 UTC times and
+    `"internet": true|false` for each Instance with a valid record. →
     `TestListCmd_JSON`, `TestStatusCmd_JSON` in `internal/cli`
 30. `status` exits 0 whatever it shows, including Problems, an invalid record and a `Proxy.Status` error, and 1
     only when Store or Docker can't be read; its Host line shows `↑ caddy <v> → <latest>` and "version info
@@ -771,11 +838,12 @@ journey slice is journeys 2 (update from v0.0.1) and 3 (Instance life) and the I
     container; it deletes leftover `.partial` files in `backups/<name>/` first, and refuses when free space is
     below the Backup's need (backup.md's rule). → the `Create` tests for `KindFinal` in `internal/backup` ([backup.md](backup.md))
 34. Journey 3: `create kids --version <journey pin>` and `create bob --version <journey pin> --hostname
-    money.<base domain>` exit 0; `list --json` and `status --json` show both running, healthy and wanted running.
+    money.<base domain> --internet` exit 0; `list --json` and `status --json` show both running, healthy and wanted running.
     → journey 3
 35. Journey 3: each Instance container carries the label `io.abyssctl.instance=<name>`, runs as the `abyssctl`
-    account's `UID:GID`, drops all capabilities, publishes no port and is only on the `abyssctl` network; the Proxy
-    runs `read_only` with only `NET_BIND_SERVICE`. → journey 3
+    account's `UID:GID`, drops all capabilities and publishes no port; `kids`, created without `--internet`, is
+    only on the `abyssctl` network, and `bob`, created with it, is on `abyssctl` and `abyssctl-external`; the Proxy
+    is on both and runs `read_only` with only `NET_BIND_SERVICE`. → journey 3
 36. Journey 3: `instances/kids/` holds `instance.env`, `compose.yaml`, `.lock` and `data/` at the Host layout's
     owners and modes, and `data/` is owned by the container's user. → journey 3
 37. Journey 3: `stop kids` leaves it exited and wanted stopped; `start kids` brings it back healthy; `restart kids`
@@ -802,5 +870,29 @@ journey slice is journeys 2 (update from v0.0.1) and 3 (Instance life) and the I
     serve it. → journey 4
 43. `reset-password` on a running Instance prompts for the new password and the Instance accepts it at login. →
     manual step in the Release check (checked by release.md's Release check)
-44. Docs: the README lines, `backup-and-restore.md`, `upgrades.md`, `security.md`, `teardown.md` and the reference
+44. `PlanCreate`'s panel has the row Internet access `no (pass --internet for bank sync)` without `Internet` and
+    `yes` with it, and no other prompt; with `Internet` the record has `INTERNET=1`, and without it no `INTERNET`
+    line. → `TestCreate_InternetAccess` (table)
+45. `Set` turning Internet access on and off, on a running Instance, writes `INTERNET` (or leaves it out), renders
+    `compose.yaml` with the matching networks and trusted proxies, and calls `ComposeUp` with `Wait` and 5 min, so
+    the container gets a new ID and is attached to exactly the record's networks; the data, `HOSTNAME`, `STATE`,
+    `TOOL_VERSION` and the site file are unchanged. → `TestSet` (table)
+46. `Set` on a stopped Instance, and on one with no container, writes the record and `compose.yaml` and calls no
+    `ComposeUp`; the Instance stays stopped, and `PlanSet`'s panel says the change takes effect at the next
+    `start`. → `TestSet_Stopped`
+47. `PlanSet` and `Set` of the record's current value are `NoOp` and change nothing; turning it on with no
+    `abyssctl-external` network, or with one whose `Free()` is 0, is refused (exit 2) with nothing changed;
+    `ErrNotHealthy` after the recreate is exit 1 with the `logs` hint and leaves the record with the new value. →
+    `TestSet_NoOp`, `TestSet_Refusals` (table), `TestSet_NotHealthy`
+48. `List` carries each record's Internet access; `Status` reports a container whose networks differ from its
+    record's, both ways, with the hint `abyssctl restart <name>`, and nothing for a container that matches. →
+    `TestList_Internet`, `TestStatus_Networks` (table)
+49. `set` asks y/N, `--yes` skips it, `--dry-run` prints the panel and changes nothing, it takes only the Instance
+    lock, and `--internet` takes only `on` or `off` (anything else is refused, exit 2, before any lock). →
+    `TestSetCmd` (table) in `internal/cli`
+50. Journey 3: the harness listens on the Host's own non-loopback address. From inside `bob`, which has Internet
+    access, a connection to that listener succeeds; from inside `kids`, which has none, it fails (no route, or a
+    timeout), and a lookup of an external name gets no answer. After `set kids --internet=on --yes` and `set bob
+    --internet=off --yes`, `kids` connects, `bob` fails and `bob`'s lookup gets no answer, and `list --json` shows each one's new `internet` value. → journey 3
+51. Docs: the README lines, `backup-and-restore.md`, `upgrades.md`, `security.md`, `teardown.md` and the reference
     pages say what [Docs it changes](#8-docs-it-changes) lists. → (review)

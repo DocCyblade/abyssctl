@@ -341,7 +341,7 @@ Then, by role:
   - the Proxy is running.
 
   The summary records Docker's versions and its image store, read from `docker info`: "containerd" when the
-  containerd snapshotter is in use, otherwise "classic". This is [host.md](host.md) item 8's Docker install.
+  containerd snapshotter is in use, otherwise "classic". This is [host.md](host.md) item 9's Docker install.
 - **R4. Docker VM: existing Docker.** Before: Docker is installed, and `docker ps -aq` and `docker images -q` are
   both empty (otherwise the step fails with "This VM has containers or images; reset it to its reset snapshot").
   Note `docker version`. Then the same `host setup` exits 0, the activity log has no `install` line for any Docker
@@ -667,7 +667,7 @@ The import rule this spec adds to `internal/archtest`:
     `version --json` shows the tag's version and commit. → Release check step R2
 14. On each fresh VM (Debian 13, Ubuntu 24.04, Ubuntu 26.04, TurnKey Core 19), `host setup` installs Docker from
     Docker's apt repository to at least the minimums, with the key and source files at 0644, and installs the
-    binary. This is [host.md](host.md) item 8. → Release check step R3
+    binary. This is [host.md](host.md) item 9. → Release check step R3
 15. On a VM with Docker already present and no containers or images, `host setup` installs no Docker package and
     leaves Docker's version unchanged. A VM with containers or images fails the step. → Release check step R4
 16. On a VM where another web server holds 80 or 443, `host setup` exits 2 naming the port and changes nothing,

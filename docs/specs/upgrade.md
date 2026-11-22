@@ -155,8 +155,8 @@ After the guards and the target check, and before anything changes:
 
 1. `Proxy.Status`: not set up → refused, hint `abyssctl host setup`; not running → refused, hint
    `abyssctl host setup`. Verify reaches the Instance through the Proxy, so it must be up.
-2. `Docker.Network(names.Network)`: missing → refused, hint `abyssctl host setup`. Its subnets become
-   `render.Instance.TrustedProxies`.
+2. `Docker.Network` of each of the networks the record says the Instance joins (`abyssctl`, plus `abyssctl-external` when the record has [Internet access](../../GLOSSARY.md)): a missing one → refused, hint `abyssctl host setup`.
+   Their subnets, in that order, become `render.Instance.TrustedProxies`.
 3. The current version works: with the container running, `Proxy.Probe(ctx, hostname, "/health")` must answer 200
    with a body containing `"status":"UP"` (a covered Hostname with no site answers an empty 200, so the status
    alone proves nothing). Otherwise refused ("kids is not healthy on 26.10.1; an Upgrade would hide why"), hint
@@ -204,7 +204,7 @@ Events are shown as `name field=value`.
    `ACTUAL_IMAGE_DIGEST`; every other key stays. A failed `Put` changed nothing: the Instance is started again as in
    step 4 and the error is returned (exit 1). From here on, every failure goes to the Rollback.
 6. **Compose file.** `Store.WriteCompose(name, render.InstanceCompose(Instance{Name, Image:
-   rec.Image(Repo), UID, GID, TrustedProxies}))`.
+   rec.Image(Repo), UID, GID, Internet: rec.Internet, TrustedProxies}))`. `INTERNET` is not changed.
 7. **Start.** `ComposeUp(Project, UpOptions{Wait: true, WaitTimeout: o.Timeout})`. Event
    `start instance=kids version=26.11.0`. A new version that never becomes healthy, a crash in migrations
    included, fails with `ErrNotHealthy` within `o.Timeout`: the restart policy keeps restarting a crashing
@@ -278,7 +278,8 @@ as any Rollback. It never moves forward to the version the interrupted run aimed
 
 A finish runs the guards and none of the pre-flight: no Proxy status, network check, probe, `PlanCreate` or image
 check, because nothing new is started and the current version is not needed to go back. `Revert`'s own checks
-still apply: the Backup id and its verification, the account, the `abyssctl` network, free space for the extract,
+still apply: the Backup id and its verification, the account, the networks the record says the Instance joins,
+free space for the extract,
 and the pull of the Backup's image by digest when it is not local. A refusal there is a failed Rollback
 ([above](#rollback)): exit 4, nothing changed, `UPGRADE_BACKUP` still set.
 
@@ -405,7 +406,8 @@ in `internal/cli`. This spec's journey slice is journey 6 ([testing.md](testing.
    `data.pre-restore/` without `UPGRADE_BACKUP` (4, `abyssctl restore <name>`); `UPGRADE_BACKUP` set plans a
    finish instead of refusing. → `TestUpgrade_Guards` (table)
 5. `PlanUpgrade` and `Upgrade` refuse (exit 2), with nothing pulled, stopped or written: an `Options.Timeout` of
-   zero or less, Proxy not set up, Proxy not running, no `abyssctl` network, a running Instance whose `/health`
+   zero or less, Proxy not set up, Proxy not running, no `abyssctl` network, no `abyssctl-external` network for
+   an Instance with Internet access, a running Instance whose `/health`
    probe fails or answers an empty 200, and a `PlanCreate` refusal (the free-space one included). A stopped
    Instance skips the probe. → `TestUpgrade_Preflight` (table)
 6. `PlanUpgrade` and `Upgrade`, given the same arguments, refuse with the same errors; `PlanUpgrade` takes no

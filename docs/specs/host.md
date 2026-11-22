@@ -10,8 +10,9 @@ adapter and locks are in [docker-and-locks.md](docker-and-locks.md). Capitalised
 Build the Host module (`internal/host`) and the `host setup` verb: [Bootstrap](../../GLOSSARY.md), its
 re-runs, and the [Tool update](../../GLOSSARY.md), which is a re-run of a newer binary. Host owns:
 
-- the Host checks: OS and architecture, concrete conflicts (ports 80 and 443, the `abyssctl` network and the
-  Proxy's name, a Data root the tool doesn't own), Docker present and new enough;
+- the Host checks: OS and architecture, concrete conflicts (ports 80 and 443, a network of the wrong kind named
+  `abyssctl` or `abyssctl-external`, the Proxy's name, a Data root the tool doesn't own), Docker present and new
+  enough;
 - installing Docker from Docker's official apt repository when it is missing, and the few other packages;
 - the `abyssctl` system account that every [Instance](../../GLOSSARY.md) container runs as;
 - `/etc/abyssctl/abyssctl.env`: its format, every key, its defaults and checks. Host is its only writer; `alerts
@@ -19,7 +20,9 @@ re-runs, and the [Tool update](../../GLOSSARY.md), which is a re-run of a newer 
 - the folders under the [Data root](../../GLOSSARY.md), `/etc/abyssctl/` and `/var/log/abyssctl/`, and every
   owner and mode in the overview's [Host layout](README.md#host-layout);
 - installing the binary at `/usr/local/bin/abyssctl`, and refusing to replace a newer one;
-- the private network `abyssctl`;
+- the two networks: `abyssctl`, internal-only, which the Proxy and every Instance join, and `abyssctl-external`,
+  an ordinary bridge network, which the Proxy and each Instance with [Internet access](../../GLOSSARY.md) join
+  ([ADR 0005](../adr/0005-internet-access-per-instance.md));
 - installing the systemd units, the [MOTD](../../GLOSSARY.md) script and the logrotate rule that the
   [Renderer](render.md) produces, and keeping the two timers enabled;
 - drift fixes: owners, modes, the account, the units, and an Instance container whose networks or published
@@ -92,7 +95,8 @@ type Proxy interface {
     // Steps and Warnings; on a Host without Docker or without proxy/ it returns the first-run steps.
     PlanEnsure(ctx context.Context) (op.Summary, error)
     // Ensure writes the Caddyfile, the Proxy compose.yaml and (only if missing) proxy.env from the compiled pin,
-    // and brings the Proxy up, ready, on the abyssctl network with only 80 and 443 published.
+    // and brings the Proxy up, ready, on the abyssctl and abyssctl-external networks with only 80 and 443
+    // published.
     Ensure(ctx context.Context) error
     // CheckCertificate runs cert install's checks on the two files and changes nothing.
     CheckCertificate(certFile, keyFile string) (summary []op.Row, err error)
@@ -263,8 +267,15 @@ Inspect reads, in this order, and stops at the first refusal:
    error wrapped in `op.Refused`; Host never upgrades Docker.
 7. **Conflicts.** For ports 80 and 443, `System.Listening`. A listener counts as the Proxy's only when the
    container `abyssctl-proxy` is running and publishes that port; any other listener is refused ("port 443 is in
-   use by another service"). With no `abyssctl.env`, an existing network `abyssctl` or container `abyssctl-proxy`
-   is refused; once `abyssctl.env` exists, both are the tool's. Containers without the `io.abyssctl.instance`
+   use by another service"). With no `abyssctl.env`, an existing container `abyssctl-proxy` is refused; once
+   `abyssctl.env` exists, it is the tool's. For the networks, `Network(names.Network)` and
+   `Network(names.ExternalNetwork)`, on a first run and on every re-run: an existing `abyssctl` whose driver is
+   `bridge` and that is internal, and an existing `abyssctl-external` whose driver is `bridge` and that is not
+   internal, are used as they are, subnet included, so an Operator with an address plan can create both before
+   the first `host setup`. Any other existing network with either name is refused ("network abyssctl exists and
+   is not an internal bridge network", or "… is not an ordinary bridge network"), hint "remove it with every
+   container off it (docker network rm <name>), or create it as docker network create --driver bridge
+   [--internal] <name>". A missing one is planned for apply step 8. Containers without the `io.abyssctl.instance`
    label and not `abyssctl-proxy` (`ListContainers(ctx, "")`) are counted for a warning ("4 other containers run on this Host").
 8. **Certificate.** With `--cert`/`--key`, `Proxy.CheckCertificate`; its refusals pass through. One of the two
    flags without the other is refused.
@@ -275,12 +286,16 @@ Inspect reads, in this order, and stops at the first refusal:
     `UID:GID` gives a panel warning, shown before the y/N: "<name> runs as <old> and cannot write its data until
     `abyssctl restart <name>`". Host still fixes the owners of its `data/` and does not recreate it.
 11. **Drift.** Every owner and mode in the Host layout, the units, the MOTD script, the logrotate rule, the timers'
-    state, the network, the Proxy (`Proxy.PlanEnsure`), and each running Instance container's networks and
-    published ports. An Instance container is drifted when its networks are not exactly `{abyssctl}` or it
-    publishes any port. Host first scans that Instance's `compose.yaml` line by line (not a YAML parse) for a
-    `ports:` key or a network name other than `abyssctl`; the Renderer never writes either. If the file has one,
-    it was edited by hand: Host warns ("compose.yaml of <name> was edited by hand; abyssctl restart <name>
-    re-renders it") and does not recreate, so a hand edit doesn't cause a recreate on every run.
+    state, the networks, the Proxy (`Proxy.PlanEnsure`), and each running Instance container's networks and
+    published ports. An Instance container is drifted when its networks are not exactly the ones its record
+    says, `{abyssctl}` without Internet access and `{abyssctl, abyssctl-external}` with it (`INTERNET=1`,
+    [store.md](store.md)), or it publishes any port. Host first scans that Instance's `compose.yaml` line by line
+    (not a YAML parse) for a `ports:` key, a network name other than `abyssctl` and `abyssctl-external`, or
+    network names that don't match the record; the Renderer never writes any of these. If the file has one, it
+    was edited by hand or the record was: Host warns ("compose.yaml of <name> does not match its record;
+    abyssctl restart <name> re-renders it") and does not recreate, so a hand edit doesn't cause a recreate on
+    every run. An Instance whose record is invalid has its published ports checked and its networks left alone,
+    with the invalid-record warning.
 
 ### Plan and the summary panel
 
@@ -335,8 +350,11 @@ Each step runs only if the plan lists it, and each change is one event. The orde
    changed.
 7. **Binary.** `WriteFile(Binary(), <bytes of Options.Executable>, 0755)`, root:root. The rename means a running
    copy keeps its old file. Event: `installed path=/usr/local/bin/abyssctl version=0.3.0 was=0.2.0`.
-8. **Network.** `CreateNetwork("abyssctl", nil)` if missing, then `Network` reads back its subnets for the
-   event (`network name=abyssctl subnets=172.18.0.0/16`).
+8. **Networks.** `CreateNetwork(names.Network, NetworkOptions{Internal: true})` if `abyssctl` is missing, then
+   `CreateNetwork(names.ExternalNetwork, NetworkOptions{})` if `abyssctl-external` is missing; Docker picks each
+   subnet, and there are no subnet flags. `Network` reads back each new network's subnets for its event
+   (`network name=abyssctl internal=true subnets=172.18.0.0/16`). An existing network is never recreated or
+   changed.
 9. **Proxy.** `Proxy.Ensure`. On a first run this seeds `proxy.env` from the compiled Caddy pin and starts the
    Proxy with no site files. On a re-run Proxy rewrites the files this binary renders: a changed Caddyfile is
    validated and reloaded, and the Proxy container is recreated only when its rendered `compose.yaml` bytes
@@ -345,7 +363,8 @@ Each step runs only if the plan lists it, and each change is one event. The orde
 10. **Instance containers.** For each drifted running Instance container (step 11 of inspect) whose
     `compose.yaml` was not edited by hand: `ComposeUp(Project{abyssctl-<name>, InstanceDir(name)},
     UpOptions{Wait: true, WaitTimeout: 5 min, ForceRecreate: true})` from its existing `compose.yaml`, with the
-    event `recreated instance=<name> reason=network` (or `reason=ports`). No Instance's `compose.yaml` or site
+    event `recreated instance=<name> reason=network` (or `reason=ports`). Compose attaches the container to the
+    networks its file names, so the recreate brings it back to what its record says. No Instance's `compose.yaml` or site
     file is rewritten, and no other container is touched. A stopped Instance is left stopped: its next `start`
     re-renders it.
 11. **Units, MOTD script, logrotate rule.** From `render.Units(Schedule{Binary(), HealthInterval, BackupTime})`
@@ -373,7 +392,8 @@ in inspect step 4 with nothing changed.
 
 Host never changes the firewall, SSH, unattended-upgrades, the hostname, the time zone or `daemon.json`, never
 upgrades or reinstalls Docker, never adds anyone to the `docker` group, never reads or changes the contents of
-Instance data or Backups, and never removes a container, a network or an image. Rootless Docker and userns-remap
+Instance data or Backups, and never removes a container, a network or an image, and never recreates a network (the one
+recreate is a drifted container, apply step 10). Rootless Docker and userns-remap
 are not supported.
 
 ## 4. Files and formats it owns
@@ -477,6 +497,12 @@ Import rule this spec adds to `internal/archtest`: `internal/host` imports only 
   from the account database each run, never from a file.
 - Settings are written before the Data root's folders, so an interrupted first run is finished by a re-run
   instead of being refused for a non-empty Data root.
+- Two networks, both created by Host with a subnet Docker picks: `abyssctl` is internal, so an Instance without
+  Internet access reaches nothing outside the Host, and `abyssctl-external` is the way out for the Proxy's
+  published ports and for each Instance with Internet access
+  ([ADR 0005](../adr/0005-internet-access-per-instance.md)). Host uses a network of the right kind that already
+  exists, subnet included, and refuses one of the wrong kind rather than recreating it, because recreating a
+  network means taking every container off it. That is also how an Operator pins the subnets: no subnet flags.
 - A re-run never rewrites an Instance's `compose.yaml` or site file and never recreates a working Instance
   container. The one exception is a container whose networks or published ports have drifted, recreated from its
   existing `compose.yaml`: those two are the Host's isolation, not the Instance's version. A hand-edited file that
@@ -519,8 +545,12 @@ Import rule this spec adds to `internal/archtest`: `internal/host` imports only 
   no Alerts are sent; the MOTD still shows the Problems.
 - `docs/guides/backup-and-restore.md`: `BACKUP_TIME` (Host local time) and `BACKUP_KEEP`.
 - `docs/guides/teardown.md`: what `host setup` installed: the timers and units, the MOTD script, the logrotate
-  rule, `/etc/abyssctl/`, `/var/log/abyssctl/`, the binary, the account, the network, the Proxy, the Actual and Caddy
+  rule, `/etc/abyssctl/`, `/var/log/abyssctl/`, the binary, the account, the two networks, the Proxy, the Actual and Caddy
   images and the Data root, and Docker's apt source if Host installed Docker.
+- `docs/guides/security.md`, Internet access: how to pin both networks' subnets by creating them before the
+  first `host setup` (`docker network create --driver bridge --internal --subnet <cidr> abyssctl` and
+  `docker network create --driver bridge --subnet <cidr> abyssctl-external`), and that `host setup` refuses a
+  network of either name that is of the wrong kind.
 - `docs/guides/certificates.md`: `host setup --cert <file> --key <file>` installs a Certificate the same way as
   `cert install` ([proxy.md](proxy.md)).
 - Reference: the `host setup` page, from its help text: every flag, that an omitted flag keeps its value, and that
@@ -552,78 +582,88 @@ Lifecycle lands.
    key. → `TestPlan_FixedAndKeptSettings`
 6. Each unsupported OS and architecture is refused, and passes with a warning under `--unsupported`; Debian 13,
    Ubuntu 24.04 and 26.04 and a TurnKey Core 19 `os-release` pass. → `TestPlan_SupportedHosts` (table)
-7. With no `abyssctl.env`, a non-empty Data root, port 80 or 443 in use, an existing `abyssctl` network or an
-   existing `abyssctl-proxy` container is refused with nothing changed; on a re-run, listeners on ports a running
+7. With no `abyssctl.env`, a non-empty Data root, port 80 or 443 in use or an existing `abyssctl-proxy` container
+   is refused with nothing changed; on a re-run, listeners on ports a running
    `abyssctl-proxy` publishes are not a conflict, and the same listeners with the Proxy stopped are; other
    containers give a warning. → `TestPlan_Conflicts` (table); the Release check refuses on a Host with a web
    server on 80/443 (checked by release.md's Release check)
-8. Docker missing plans `apt-get update`, the key, the source and the four packages; Docker missing with an
+8. On a first run and on a re-run, an existing `abyssctl` that is bridge and internal and an existing
+   `abyssctl-external` that is bridge and not internal are used as they are, subnet included, with no create
+   step; an `abyssctl` that is not internal, an `abyssctl-external` that is internal, and either with a driver
+   other than `bridge` are each refused (exit 2) with the hint and nothing changed; a missing one plans its
+   create, `abyssctl` with `Internal` and `abyssctl-external` without, Docker picking the subnet. →
+   `TestPlan_Networks` (table), `TestSetup_CreatesNetworks`
+9. Docker missing plans `apt-get update`, the key, the source and the four packages; Docker missing with an
    existing Docker apt source is refused; Docker missing on a non-apt `ID` under `--unsupported` is refused; Docker
    too old is refused with the part and versions; a stopped daemon is refused with the hint `systemctl start
    docker`; Docker that meets the minimums gets no install step; only `curl` missing plans `apt-get update` and
    one install. → `TestPlan_Docker` (table); journey 1 runs on the runner's existing Docker; the Docker install
    runs on the fresh Debian 13, Ubuntu 24.04, Ubuntu 26.04 and TurnKey Core 19 test VMs (checked by release.md's
    Release check)
-9. A missing group plans only `groupadd --system`, a missing user only `useradd --system` with nologin and no home,
-   and both missing plan both; a user or group with ID 0 or ≥ 1000 is refused; a wrong shell, home or primary
-   group plans the matching `usermod`. → `TestPlan_Account` (table)
-10. A running Instance container whose user is not the account's IDs gives the warning "<name> runs as <old> and
+10. A missing group plans only `groupadd --system`, a missing user only `useradd --system` with nologin and no home,
+    and both missing plan both; a user or group with ID 0 or ≥ 1000 is refused; a wrong shell, home or primary
+    group plans the matching `usermod`. → `TestPlan_Account` (table)
+11. A running Instance container whose user is not the account's IDs gives the warning "<name> runs as <old> and
     cannot write its data until `abyssctl restart <name>`" in the panel, and is not recreated. →
     `TestPlan_AccountIDsChanged`
-11. An installed binary newer than the running one is refused (exit 2) with nothing changed; an older one plans
+12. An installed binary newer than the running one is refused (exit 2) with nothing changed; an older one plans
     the copy and shows `from → to`; the same bytes plan nothing; the same version with different bytes plans the
     copy; one that times out after 10 s or prints no valid version plans the copy with a warning; running from
     `Binary()` itself copies nothing. → `TestPlan_Binary` (table)
-12. An Instance whose `TOOL_VERSION` is newer than the binary stops the run with exit 4 and a hint, also when the
+13. An Instance whose `TOOL_VERSION` is newer than the binary stops the run with exit 4 and a hint, also when the
     rest of its record would not parse; an invalid record with no newer `TOOL_VERSION` is a warning; an Instance with `data.pre-restore/` or `UPGRADE_BACKUP` is not refused. →
     `TestPlan_Instances`
-13. For a scripted drifted state (a file at 0644, a folder owned by 1000:1000, a `data/` file owned by root, a
-    stale unit, a disabled timer, a timer masked at runtime, an Instance container with a published port, one also
-    on a second network, and one whose hand-edited `compose.yaml` has `ports:`), the plan lists exactly those
-    fixes and the hand-edit warning; apply emits one `fixed` or `recreated` event for each fix and calls
-    `ComposeUp` with `ForceRecreate` only for the two drifted containers whose files are not hand-edited. →
+14. For a scripted drifted state (a file at 0644, a folder owned by 1000:1000, a `data/` file owned by root, a
+    stale unit, a disabled timer, a timer masked at runtime, an Instance container with a published port, one
+    without Internet access also on `abyssctl-external`, one with Internet access only on `abyssctl`, one also on
+    a third network, one whose hand-edited `compose.yaml` has `ports:`, and one whose record has `INTERNET=1`
+    while its `compose.yaml` names only `abyssctl`), the plan lists exactly those fixes and the two hand-edit
+    warnings; apply emits one `fixed` or `recreated` event for each fix and calls `ComposeUp` with
+    `ForceRecreate` only for the four drifted containers whose files match their records. →
     `TestPlan_Drift`, `TestSetup_DriftEvents`
-14. A Host with nothing drifted plans `NoOp`, and `Setup` writes no file and runs no changing command. →
+15. A Host with nothing drifted plans `NoOp`, and `Setup` writes no file and runs no changing command. →
     `TestSetup_NoOp`
-15. `PlanSetup` and `Setup` return the same refusal for each refused case, `PlanSetup` changes nothing, and
+16. `PlanSetup` and `Setup` return the same refusal for each refused case, `PlanSetup` changes nothing, and
     `Setup` runs the steps the plan listed in the apply order. → `TestPlanMatchesSetup` (table)
-16. Apply writes `abyssctl.env` before creating any folder under the Data root and calls `Options.Lock` right
+17. Apply writes `abyssctl.env` before creating any folder under the Data root and calls `Options.Lock` right
     after step 4; a run cut off after the settings, with no `state/` yet, is finished by a re-run through the hook
     instead of refused. → `TestSetup_SettingsFirst`, `TestSetup_LockHook`
-17. The walk leaves the contents of `caddy-data/` and `caddy-config/` alone, never follows a symlink and never
+18. The walk leaves the contents of `caddy-data/` and `caddy-config/` alone, never follows a symlink and never
     changes a mode inside `data/` or `data.pre-restore/`. → `TestSetup_WalkRules`
-18. Units, the MOTD script and the logrotate rule are written only when their bytes change; a changed timer gets
+19. Units, the MOTD script and the logrotate rule are written only when their bytes change; a changed timer gets
     `daemon-reload` and a restart; a changed `HEALTH_INTERVAL` rewrites the health timer and the MOTD script. →
     `TestSetup_Units`
-19. The Proxy's steps and warnings from `PlanEnsure` appear in the panel, including the recreate step, before the y/N. →
+20. The Proxy's steps and warnings from `PlanEnsure` appear in the panel, including the recreate step, before the y/N. →
     `TestPlan_ProxySteps`
-20. The summary panel and every event show Pushover values only as `…abcd`; `SetPushover` changes only the two
+21. The summary panel and every event show Pushover values only as `…abcd`; `SetPushover` changes only the two
     keys and refuses a value that is not 30 characters of `[A-Za-z0-9]`. → `TestSummary_MasksSecrets`,
     `TestSetPushover`
-21. `Account` returns the account's IDs and `ErrNoAccount` when it is missing. → `TestAccount`
-22. Journey 1: `host setup --base-domain …` on a fresh Host exits 0, the Proxy runs ready with no site files and
-    an HTTPS request to it fails (connection closed or handshake error), and both timers are enabled and active; the activity log holds the run's lines from its first one. →
-    journey 1
-23. Journey 1: every path in the Host layout has its owner and mode; the account is a system account with
+22. `Account` returns the account's IDs and `ErrNoAccount` when it is missing. → `TestAccount`
+23. Journey 1: `host setup --base-domain …` on a fresh Host exits 0, the Proxy runs ready with no site files and
+    an HTTPS request to it fails (connection closed or handshake error), and both timers are enabled and active; the activity log holds the run's lines from its first one;
+    `docker network inspect` shows `abyssctl` as bridge and internal and `abyssctl-external` as bridge and not
+    internal, and the Proxy on both. → journey 1
+24. Journey 1: every path in the Host layout has its owner and mode; the account is a system account with
     nologin; after a mode and an owner are broken by hand, a re-run fixes both and logs one `fixed` line each;
     then another re-run is a no-op (exit 0, "Nothing to fix"). → journey 1
-24. Journey 1: `systemd-analyze verify` passes on the installed units, `logrotate -d` on the installed rule, and
+25. Journey 1: `systemd-analyze verify` passes on the installed units, `logrotate -d` on the installed rule, and
     the installed MOTD script, run after `systemctl stop` and `systemctl disable` of the health timer and before
     any Health check, prints "Health check not running"; a re-run enables and starts the timer again. → journey 1
-25. Journey 1: `host setup --dry-run` on a set-up Host with a broken mode prints the panel, exits 0 and changes
+26. Journey 1: `host setup --dry-run` on a set-up Host with a broken mode prints the panel, exits 0 and changes
     nothing; without a TTY and without `--yes`, a plan with steps refuses with exit 2. → journey 1
-26. Journey 2: running `host setup` from the build under test on a Host set up with stamped v0.0.1 replaces the
+27. Journey 2: running `host setup` from the build under test on a Host set up with stamped v0.0.1 replaces the
     binary and the units hold the build's bytes, and the Proxy container keeps its ID when the Proxy `compose.yaml` bytes did not
     change; running the v0.0.1 binary's `host setup` afterwards is refused with exit 2 and changes nothing. →
     journey 2 (checked by lifecycle.md's journey slice)
-27. Journey 2: the Instance containers keep their IDs across the update, and a changing command on an Instance
+28. Journey 2: the Instance containers keep their IDs across the update, and a changing command on an Instance
     whose `TOOL_VERSION` is newer than the binary exits 4 → journey 2 (checked by lifecycle.md's journey slice);
     `status` flags the Instances' files as out of date → journey 2 (checked by lifecycle.md's journey slice)
-28. Journey 3: a file in an Instance's `data/` changed to root:root by hand is owned by `abyssctl:abyssctl` again
+29. Journey 3: a file in an Instance's `data/` changed to root:root by hand is owned by `abyssctl:abyssctl` again
     after a `host setup` re-run, with its mode unchanged. → journey 3 (checked by lifecycle.md's journey slice)
-29. `host setup --cert/--key` installs the Certificate through the Proxy with the Instances' Hostnames. →
+30. `host setup --cert/--key` installs the Certificate through the Proxy with the Instances' Hostnames. →
     `TestSetup_Certificate`; journey 4's `host setup --cert/--key` (checked by lifecycle.md's journey slice)
-30. `internal/host`'s direct imports are only those in the import rule, and only `internal/cli` imports it. →
+31. `internal/host`'s direct imports are only those in the import rule, and only `internal/cli` imports it. →
     `TestImportRules` in `internal/archtest`
-31. Docs: the README sections, `security.md`, `alerts.md`, `backup-and-restore.md`, `teardown.md`,
-    `docs/guides/certificates.md` (`host setup --cert/--key`) and the `host setup` reference page say what [Docs it changes](#8-docs-it-changes) lists. → (review)
+32. Docs: the README sections, `security.md`, `alerts.md`, `backup-and-restore.md`, `teardown.md`,
+    `docs/guides/certificates.md` (`host setup --cert/--key`), `security.md`'s Internet access part (pinning the
+    subnets) and the `host setup` reference page say what [Docs it changes](#8-docs-it-changes) lists. → (review)

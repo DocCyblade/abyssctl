@@ -53,7 +53,7 @@ type Client interface {
 
     // Networks.
     Network(ctx context.Context, name string) (Network, bool, error)
-    CreateNetwork(ctx context.Context, name string, labels map[string]string) error
+    CreateNetwork(ctx context.Context, name string, o NetworkOptions) error // always the bridge driver
 
     // Running things in containers.
     Exec(ctx context.Context, container string, cmd []string) (Result, error)       // output captured
@@ -126,11 +126,22 @@ type Image struct {
 // DigestFor returns the digest recorded for repo (compared after normalising both sides), if any.
 func (i Image) DigestFor(repo string) (string, bool)
 
+type NetworkOptions struct {
+    Internal bool              // --internal: containers on it reach nothing outside the Host
+    Labels   map[string]string
+}
+
 type Network struct {
-    ID, Name, Driver string
-    Subnets          []string // CIDRs from the network's IPAM config, in Docker's order
+    ID, Name, Driver string            // Driver as Docker reports it, e.g. "bridge"
+    Internal         bool              // created --internal
+    Subnets          []string          // CIDRs from the network's IPAM config, in Docker's order
+    Containers       int               // containers attached to it now
     Labels           map[string]string
 }
+
+// Free returns how many more containers can join: the addresses in Subnets, less each subnet's network,
+// broadcast and gateway addresses, less Containers; never below 0.
+func (n Network) Free() int
 
 type Result struct {
     Stdout, Stderr []byte // each capped at 1 MiB; the cap is noted in Truncated
@@ -227,8 +238,8 @@ Invariants:
 - `ComposeUp` and `Run` never pull: an image that is not local fails with `ErrNotFound`. Only `Pull` reaches a
   registry, so `start` and `restart` reach a registry only to re-pull a pinned image missing locally, and
   Restore's swap and Rollback never need the network.
-- `ComposeDown` never removes volumes or images. Instance data is a bind mount and the network is external, so a
-  down removes only the project's containers.
+- `ComposeDown` never removes volumes, images or networks. Instance data is a bind mount and both networks are
+  external, so a down removes only the project's containers.
 - `Exec` and `Run` return a `Result` with no error when the command ran, whatever its exit code; the caller
   judges `Code`. They return an error only when Docker could not run it: container missing (`ErrNotFound`),
   not running (`ErrNotRunning`), or exit 125, 126 or 127. Docker gives 126 and 127 both for its own failures
@@ -246,10 +257,11 @@ Invariants:
 
 ```go
 const (
-    Prefix        = "abyssctl-"            // every Compose project and container the tool owns
-    ProxyProject  = "abyssctl-proxy"       // the Proxy's Compose project and container
-    Network       = "abyssctl"             // the private network
-    InstanceLabel = "io.abyssctl.instance" // value: the Instance name
+    Prefix          = "abyssctl-"          // every Compose project and container the tool owns
+    ProxyProject    = "abyssctl-proxy"     // the Proxy's Compose project and container
+    Network         = "abyssctl"           // the private network: bridge, internal
+    ExternalNetwork = "abyssctl-external"  // the external network: bridge, not internal
+    InstanceLabel   = "io.abyssctl.instance" // value: the Instance name
 )
 
 func InstanceProject(name string) string // "abyssctl-<name>": project, container and network alias
@@ -269,7 +281,7 @@ func (f *Fake) SetVersions(v docker.Versions)
 func (f *Fake) AddImage(img docker.Image)               // local; names normalised on the way in
 func (f *Fake) AddRemote(ref string, img docker.Image)  // Pull(ref) makes img local
 func (f *Fake) AddContainer(c docker.Container)         // e.g. an Orphan, or another tool's container
-func (f *Fake) AddNetwork(n docker.Network)
+func (f *Fake) AddNetwork(n docker.Network)             // as given: driver, internal flag and subnets
 func (f *Fake) SetImageHealth(ref, health string)       // what a ComposeUp --wait of ref reaches
 func (f *Fake) SetHealth(container, health string)      // change a running container's health later
 func (f *Fake) SetExec(container string, cmd []string, r docker.Result)
@@ -299,7 +311,9 @@ CLI adapter (the contract suite checks both).
 
 - A Compose project is one container named after the project. `ComposeUp` reads `<Dir>/compose.yaml` from disk
   (missing → `fs.ErrNotExist`), records it, and takes the container's image from the file's first `image:`
-  line. It does not otherwise parse the file. A project named `names.InstanceProject(x)` gets the label
+  line, and attaches it to each network named at two spaces' indent under the file's top-level `networks:` key
+  (a network the fake doesn't have fails `ErrNotFound`, as Compose does for a missing external network). It does
+  not otherwise parse the file. A project named `names.InstanceProject(x)` gets the label
   `names.InstanceLabel=x`, and every project gets `com.docker.compose.project=<name>`, as the generated files
   give real containers ([render.md](render.md) tests the files themselves).
 - `ComposeUp` of a missing image fails `ErrNotFound`. An unchanged running project is left alone; a changed
@@ -311,7 +325,10 @@ CLI adapter (the contract suite checks both).
 - `RemoveImage` fails `ErrConflict` only when removing the reference would delete an image a container uses,
   running or not; otherwise it removes that reference (and the repo's digest references with its last tag), and
   the image goes when its last reference does. `CreateNetwork` of an
-  existing name fails `ErrConflict` and otherwise assigns the subnet `172.30.0.0/16`.
+  existing name fails `ErrConflict`; otherwise it records driver `bridge`, the `Internal` flag and the labels,
+  and assigns the next free subnet of `172.30.0.0/16`, `172.31.0.0/16`, `172.32.0.0/16` and so on, skipping
+  any a network added with `AddNetwork` holds. So the first network created gets `172.30.0.0/16`. A network's
+  `Containers` counts the containers attached to it now, on top of the count `AddNetwork` gave.
 - `Exec` on a container that is not running fails `ErrNotRunning`. An `Exec` or `Run` with no `SetExec` /
   `SetRun` entry returns code 0 and no output.
 
@@ -331,8 +348,8 @@ func Contract(t *testing.T, c docker.Client, env Env)
 
 One suite of behaviour both adapters must share (see the acceptance list). Module tests run it against the fake;
 the journey harness ([testing.md](testing.md)) runs it against the real CLI with the fake Actual image's tags.
-Every object the suite creates (projects, containers, networks) has a unique name of its own, never the network
-`abyssctl` or a real Instance or Proxy project, and is removed in `t.Cleanup`, so the suite can run on a Host
+Every object the suite creates (projects, containers, networks) has a unique name of its own, never the networks
+`abyssctl` or `abyssctl-external` or a real Instance or Proxy project, and is removed in `t.Cleanup`, so the suite can run on a Host
 that also runs Abyss.
 
 ### `internal/locks`: the Host and Instance locks
@@ -443,14 +460,14 @@ The adapter adds no timeout of its own. Callers bound calls with `ctx` (30 s for
 | `Image` | `image inspect <ref>` | |
 | `ListImages` | `image ls --quiet --no-trunc`, then one `image inspect <unique ids…>` | |
 | `RemoveImage` | `image rm <ref>` | last reference of an image a container uses → `ErrConflict` |
-| `Network` | `network inspect <name>` | |
-| `CreateNetwork` | `network create --driver bridge [--label k=v …] <name>` | Docker assigns the subnet; taken → `ErrConflict` |
+| `Network` | `network inspect <name>` | driver, `Internal`, subnets, the number of attached containers and labels from the JSON |
+| `CreateNetwork` | `network create --driver bridge [--internal] [--label k=v …] <name>` | `--internal` when `Internal`; Docker assigns the subnet; taken → `ErrConflict` |
 | `Exec` | `container exec <name> <cmd…>` | output captured into `Result` |
 | `ExecAttached` | `container exec [--interactive] [--tty] <name> <cmd…>` | `--interactive` when `Stdin` is set, `--tty` when `TTY` |
 | `Logs` | `container logs [--follow] [--tail <n>] <name>` | written to `io.Stdout` / `io.Stderr` as Docker splits them |
 | `Run` | `container run --rm --pull never --network none --cap-drop ALL --security-opt no-new-privileges [--mount type=bind,src=…,dst=…[,readonly]] <image> <cmd…>` | output captured into `Result` |
 
-What the names, labels, images and commands mean belongs to the callers: the network to [host.md](host.md), the
+What the names, labels, images and commands mean belongs to the callers: the networks to [host.md](host.md), the
 Proxy project, Caddy's validate and reload and the Proxy upgrade pre-check to [proxy.md](proxy.md), Instance
 projects to [lifecycle.md](lifecycle.md), images and digests to [versions.md](versions.md). The adapter only
 carries them.
@@ -482,10 +499,13 @@ one shows up as a failing test when the fixtures are refreshed.
 
 ### Minimum versions
 
-The minimums are Docker Engine **24.0** and Compose **2.24**, read from `buildinfo.CompiledPins()`
+The minimums are Docker Engine **25.0.5** and Compose **2.24**, read from `buildinfo.CompiledPins()`
 (`docker_engine_min`, `docker_compose_min` in `internal/buildinfo/pins.json`, which
 [foundation.md](foundation.md) owns). Both versions have `up --wait --wait-timeout` and a stable `--format json`,
-and every flag in the table above. `CheckVersions` compares the leading numeric `MAJOR.MINOR[.PATCH]` of each
+and every flag in the table above. Engine 25.0.5 is the first whose embedded DNS stops forwarding external
+lookups for a container on an internal network only (CVE-2024-29018), so an Instance without
+[Internet access](../../GLOSSARY.md) can't send data out through DNS
+([ADR 0005](../adr/0005-internet-access-per-instance.md)). `CheckVersions` compares the leading numeric `MAJOR.MINOR[.PATCH]` of each
 version and ignores anything after it (`26.1.5+dfsg1`, `2.24.6-1`). [Host](host.md) calls `Versions` and
 `CheckVersions` before it uses an existing Docker, and refuses one that is too old. Raising a minimum is a commit
 to `pins.json` with its reason and a fresh fixture set.
@@ -569,11 +589,12 @@ Makefile                        capture
   the text. A line that does not parse gives a zero `Holder`.
 - **Docker fixtures.** Each `testdata/<engine>-<compose>/` holds the stdout of `version`, `compose version`,
   `compose ps` (running, exited), `container inspect` (running healthy, unhealthy, exited, no healthcheck, with
-  published ports, with `cap_drop` and a read-only root), `image inspect` (a Docker Hub official image, a Docker
+  published ports, with `cap_drop` and a read-only root, on two networks), `image inspect` (a Docker Hub official image, a Docker
   Hub user image, a local-registry image, an image whose config has `Labels` with
-  `org.opencontainers.image.version`), `image ls --quiet`, `container ls --quiet`, `network inspect`, and the
+  `org.opencontainers.image.version`), `image ls --quiet`, `container ls --quiet`, `network inspect` (an
+internal and an ordinary bridge network), and the
   stderr and exit status of every failure the classifier matches. Two sets are kept: the minimum versions
-  (Engine 24.0, Compose 2.24) and the newest stable Docker when the set is captured, whose default image store
+  (Engine 25.0.5, Compose 2.24) and the newest stable Docker when the set is captured, whose default image store
   may differ. `go test -tags capture -run TestCapture ./internal/docker/`, run as root on a throwaway Linux
   machine with that Docker, rewrites one set from objects it creates and removes.
 - **Refreshing the fixtures.** Two ways, with the same test:
@@ -634,10 +655,11 @@ fixtures and a contract case.
 
 ## 8. Docs it changes
 
-- README, Requirements: Docker Engine 24.0 and Compose 2.24 or newer; an existing Docker that meets them is used as
-  is.
+- README, Requirements: Docker Engine 25.0.5 and Compose 2.24 or newer; an existing Docker that meets them is used
+  as is.
 - `docs/guides/security.md`: Abyss manages only the local daemon through the default context and ignores
-  `DOCKER_HOST`, `DOCKER_CONTEXT` and `DOCKER_CONFIG`.
+  `DOCKER_HOST`, `DOCKER_CONTEXT` and `DOCKER_CONFIG`; and, in its Internet access part, that Engine 25.0.5 is
+  required because older Engines answered external name lookups for containers on an internal network.
 - `CONTRIBUTING.md`: a "Docker fixtures" section: when to refresh them (a minimum moves, or a new Docker breaks
   parsing), running `capture.yml` and taking its artifacts with `gh run download <run-id>` into a normal pull
   request, and `make capture` on a throwaway Linux machine.
@@ -651,7 +673,8 @@ helper) in a temp folder in place of the fixed `PATH`. `contract` runs `dockerte
 `t.TempDir()`, with helper child processes as other holders.
 
 1. `CheckVersions` accepts the pinned minimums and anything newer, refuses an older Engine or Compose naming the
-   part, the version found and the minimum, and ignores distribution suffixes. → `TestCheckVersions` (table)
+   part, the version found and the minimum, and ignores distribution suffixes; Engine 25.0.4 and 24.0.9 are
+   refused and 25.0.5 is accepted. → `TestCheckVersions` (table)
 2. `Versions` parses both fixture sets and strips a leading `v`; captured stderr gives `ErrDaemon` and
    `ErrNoCompose`. → `TestVersions_ParsesFixtures`, `TestVersions_DaemonDown`, `TestVersions_NoCompose`
 3. With no `docker` on the fixed `PATH`, every method returns `ErrNotInstalled`; once a `docker` appears, the same
@@ -684,8 +707,9 @@ helper) in a temp folder in place of the fixed `PATH`. `contract` runs `dockerte
 13. `ParseRef` and `NormalizeRepo` follow Docker's rule (registry host detection, `docker.io` and
     `index.docker.io`, `library/`, tags after the last `/`, digests) and reject what Docker would reject. →
     `TestParseRef` (table)
-14. `Network` parses the subnets; `CreateNetwork` passes the bridge driver and labels and lets Docker pick the
-    subnet. → `TestNetwork_ParsesSubnets`, `TestCreateNetwork_Arguments`
+14. `Network` parses the driver, the internal flag and the subnets of an internal and an ordinary bridge network;
+    `CreateNetwork` passes the bridge driver, `--internal` only when asked, and the labels, and lets Docker pick
+    the subnet. → `TestNetwork_ParsesSubnets`, `TestCreateNetwork_Arguments`
 15. Each captured failure classifies to its sentinel; an unknown one has a nil `Kind` and keeps at most 4 KiB of
     stderr. → `TestClassify_Fixtures`, `TestClassify_UnknownKeepsTail`
 16. `Exec` and `Run` return a `Result` with the command's code and no error for a non-zero exit, cap each stream
@@ -705,14 +729,20 @@ helper) in a temp folder in place of the fixed `PATH`. `contract` runs `dockerte
 22. Both adapters agree on: up → running → stop → exited → up → down → gone; up of a missing image is
     `ErrNotFound`; up `--wait` of the unhealthy image is `ErrNotHealthy`; `Pull` makes an image local; removing one of
     several references of a used image removes just that reference, removing the last one is `ErrConflict`, and
-    removing a repo's last tag drops its digest references; creating a network twice is `ErrConflict`; `Exec` on a stopped
+    removing a repo's last tag drops its digest references; creating a network twice is `ErrConflict`; a network
+    created `Internal` reads back as bridge and internal, one created without it as bridge and not internal, and a
+    project whose file names both joins both; `Exec` on a stopped
     container is `ErrNotRunning`; missing objects read as `false`; `RemoveContainer` of a missing container is
     `ErrNotFound`; `ListContainers` finds a project's container by `io.abyssctl.instance`. → `dockertest.Contract`: `TestContract_Fake` (module test) and
     `TestDockerContract` (journey harness, real CLI)
 23. The fake records every call in order, keeps each project's `ComposeFile`, returns a `Fail` once and a
-    `FailWhen` every time, and refuses to start a missing image. → `TestFake_RecordsCalls`,
-    `TestFake_ComposeFile`, `TestFake_FailureInjection`
-24. `names.InstanceProject("kids")` is `abyssctl-kids`, and `names` imports nothing; Render imports only
+    `FailWhen` every time, and refuses to start a missing image; it attaches a project's container to the networks
+    its file names and refuses a missing one with `ErrNotFound`, and gives created networks `172.30.0.0/16`,
+    then `172.31.0.0/16`, skipping added ones, counting attached containers in `Containers`; `Network.Free` of a
+    `/30` with one container is 0 and of a `/29` with two is 3. → `TestFake_RecordsCalls`, `TestFake_ComposeFile`,
+    `TestFake_FailureInjection`, `TestFake_Networks`, `TestNetwork_Free` (table)
+24. `names.InstanceProject("kids")` is `abyssctl-kids`, `names.Network` is `abyssctl` and `names.ExternalNetwork`
+    is `abyssctl-external`, and `names` imports nothing; Render imports only
     `names`; only `cli`, `host`, `proxy`, `lifecycle`, `backup`, `versions`, `upgrade` and `health` import
     `internal/docker`; `dockerfake` and `dockertest` appear in no non-test build. → `TestNames`, `TestImportRules`
 25. Two `Acquire`s of one lock from two processes serialise; `TryAcquire` of a held lock returns a `*BusyError`

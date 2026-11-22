@@ -72,6 +72,17 @@ func (h *H) SetUpHost(t *testing.T) *certtest.CA
 // Create runs `create <name> --version <v> --yes [--hostname <h>]` and waits until the Instance is healthy.
 func (h *H) Create(t *testing.T, name, version, hostname string)
 
+// HostListener listens on TCP on the Host's own first non-loopback IPv4 address, on a free port, for the rest of the
+// test. A container with Internet access reaches it through its default route; one on the internal network only
+// has no route to it. No packet leaves the Host, so the journeys stay offline.
+func (h *H) HostListener(t *testing.T) (addr string)
+
+// Reaches runs a 5-second TCP connect to addr from inside the container (`docker exec … node -e`, Actual's
+// image having node) and reports whether it connected. Resolves runs a lookup of an external name inside the
+// container and reports whether any answer came back.
+func (h *H) Reaches(t *testing.T, container, addr string) bool
+func (h *H) Resolves(t *testing.T, container, name string) bool
+
 // Docker reads: `docker inspect` decoded, container IDs, image references.
 func (h *H) Inspect(t *testing.T, container string) Container
 func (h *H) ContainerID(t *testing.T, container string) string
@@ -300,7 +311,7 @@ artifact:
 image stay. It removes:
 
 - every container labelled `io.abyssctl.instance`, `abyssctl-proxy` and every `abyssctl-*` Compose project;
-- the `abyssctl` network;
+- the `abyssctl` and `abyssctl-external` networks;
 - every local image of the two stamped repos;
 - `/etc/abyssctl/`, the Data root, `/var/log/abyssctl/`, the four units (stopped and disabled first, then
   `daemon-reload`), `/etc/update-motd.d/90-abyssctl`, `/etc/logrotate.d/abyssctl` and
@@ -377,13 +388,14 @@ and its lock file, and any golden files that show the version. `TestPins_Valid` 
 
 ### Journey 1: Bootstrap
 
-Owners: [host.md](host.md) 22–25, [proxy.md](proxy.md) 30, [render.md](render.md) 7, 9, 11 and 12, and
+Owners: [host.md](host.md) 23–26, [proxy.md](proxy.md) 30, [render.md](render.md) 7, 9, 11 and 12, and
 [foundation.md](foundation.md) 24.
 
 1. `Blank`. Then `host setup --base-domain abyss.test --yes` exits 0. The Proxy is running and ready, with no file
    in `proxy/sites/`. An HTTPS request to `127.0.0.1:443` fails, either because the connection is closed or
    because the handshake fails. Both timers are enabled and active. The activity log holds the run's lines,
-   starting with its `begin`.
+   starting with its `begin`. `docker network inspect` shows `abyssctl` as bridge and internal and
+   `abyssctl-external` as bridge and not internal, and the Proxy on both.
 2. Straight away: `systemctl stop` and `systemctl disable` `abyssctl-health.timer`. There is no `state/motd.txt`,
    and `/etc/update-motd.d/90-abyssctl` prints "Health check not running".
 3. Every path in the overview's Host layout that exists now has the layout's owner and mode, which shows that the
@@ -400,7 +412,7 @@ Owners: [host.md](host.md) 22–25, [proxy.md](proxy.md) 30, [render.md](render.
 
 ### Journey 2: Tool update
 
-Owners: [host.md](host.md) 26 and 27, and [lifecycle.md](lifecycle.md) 40.
+Owners: [host.md](host.md) 27 and 28, and [lifecycle.md](lifecycle.md) 40.
 
 1. `Blank`. Run the staged `abyssctl-0.0.1` for `host setup --base-domain abyss.test --cert … --key … --yes`
    and `create kids --version <pin> --yes`. Note the IDs of `abyssctl-kids` and `abyssctl-proxy`.
@@ -418,19 +430,20 @@ Owners: [host.md](host.md) 26 and 27, and [lifecycle.md](lifecycle.md) 40.
 
 Owners:
 
-- [lifecycle.md](lifecycle.md) 34–39;
+- [lifecycle.md](lifecycle.md) 34–39 and 50;
 - [store.md](store.md) 15 and 28;
 - [render.md](render.md) 2, 3 and 8;
 - [proxy.md](proxy.md) 31;
-- [host.md](host.md) 28.
+- [host.md](host.md) 29.
 
 1. `Blank`, `SetUpHost`. `create kids --version <pin>` and `create bob --version <pin> --hostname
-   money.abyss.test` exit 0. `list --json` and `status --json` show both running, healthy and wanted running.
+   money.abyss.test --internet` exit 0. `list --json` and `status --json` show both running, healthy and wanted running.
 2. `docker inspect` of `abyssctl-kids` and `abyssctl-bob` shows each container:
    - with the label `io.abyssctl.instance=<name>`;
    - with `User` set to the UID:GID that `id abyssctl` reports;
    - with `CapDrop` set to `ALL` and `no-new-privileges`;
-   - with no port bindings, and on the `abyssctl` network only.
+   - with no port bindings;
+   - on the networks its record says: `kids` on `abyssctl` only, `bob` on `abyssctl` and `abyssctl-external`.
 
    `abyssctl-proxy` has `ReadonlyRootfs` true, `CapDrop` set to `ALL` and `CapAdd` set to `NET_BIND_SERVICE` only.
 3. `instances/kids/` holds `instance.env`, `compose.yaml`, `.lock` and `data/` at the layout's owners and modes.
@@ -442,12 +455,18 @@ Owners:
    - `logs kids --tail 5` prints at most five lines;
    - `exec kids -- id -u` prints the account's UID;
    - `exec kids -- sh -c 'exit 7'` exits 7.
-5. `chown root:root` one file in `kids`'s `data/`. Then `host setup --yes` gives it back to `abyssctl:abyssctl`,
+5. [Internet access](../../GLOSSARY.md), offline: `addr := h.HostListener(t)`. `h.Reaches(abyssctl-bob, addr)` is
+   true; `h.Reaches(abyssctl-kids, addr)` is false, and `h.Resolves(abyssctl-kids, "example.com")` is false.
+   Then `set kids --internet=on --yes` and `set bob --internet=off --yes` exit 0: `kids` now reaches `addr`,
+   `bob` does not, and `h.Resolves(abyssctl-bob, "example.com")` is false (only the no-answer side is checked,
+   because the run is offline); `list
+   --json` shows `kids` with `"internet": true` and `bob` with `"internet": false`.
+6. `chown root:root` one file in `kids`'s `data/`. Then `host setup --yes` gives it back to `abyssctl:abyssctl`,
    with its mode unchanged.
-6. `remove kids --yes` exits 0. Afterwards there is no `instances/kids/`, no container and no
+7. `remove kids --yes` exits 0. Afterwards there is no `instances/kids/`, no container and no
    `proxy/sites/kids.caddy`. Under `backups/removed/kids-<stamp>/` there is a `final` Backup and its `.sha256`,
    and `sha256sum -c` passes.
-7. `docker run -d --label io.abyssctl.instance=ghost --name ghost <pin image>`. `status` shows `ghost` as an
+8. `docker run -d --label io.abyssctl.instance=ghost --name ghost <pin image>`. `status` shows `ghost` as an
    [Orphan](../../GLOSSARY.md). Then `remove --orphan ghost --yes` removes the container.
 
 ### Journey 4: Proxy and Certificate
@@ -456,7 +475,7 @@ Owners:
 
 - [lifecycle.md](lifecycle.md) 41 and 42;
 - [proxy.md](proxy.md) 32–35;
-- [host.md](host.md) 29;
+- [host.md](host.md) 30;
 - [render.md](render.md) 5;
 - [versions.md](versions.md) 17.
 

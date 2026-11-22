@@ -304,7 +304,7 @@ verification at Restore.
    (`ErrNoBackup`, exit 2), and the Backup must pass verification (`ErrVerify`, exit 2). With `Latest`, take
    `List` newest first and use the first that passes; each that fails is an event `skipped id=… reason=…`, and
    none passing is exit 2.
-3. **Checks.** `Account()`; `Network(names.Network)` exists (else exit 2, hint `abyssctl host setup`); free space
+3. **Checks.** `Account()`; each of the networks the record says the Instance joins (`abyssctl`, plus `abyssctl-external` when the record has [Internet access](../../GLOSSARY.md)) exists (else exit 2, hint `abyssctl host setup`); free space
    on the Data root's filesystem is at least the `pre-restore` Backup's need plus the extract's need (the
    [rule](#invariants-and-error-modes)).
 4. **Pull.** If `<repo>@<digest>` from the manifest is not local, `Pull` it; a failure is refused (exit 2),
@@ -325,7 +325,8 @@ first". The outcome line names the `pre-restore` Backup's id.
 ### The shared swap (`Revert`)
 
 `Revert(ctx, name, backupID, RevertOpts)` first runs guards 1 and 2 (exit 4) and these checks, each refusing (exit 2)
-with nothing changed: Restore's step 2 (the id and verification); `Account()`; the `abyssctl` network; free space
+with nothing changed: Restore's step 2 (the id and verification); `Account()`; the networks the record says the
+Instance joins; free space
 for the extract (the [rule](#invariants-and-error-modes)); then Restore's step 4 (pull). Then the swap:
 
 1. **Stop** the container if it is running, and remember whether it was `running` or `restarting`.
@@ -336,9 +337,10 @@ for the extract (the [rule](#invariants-and-error-modes)); then Restore's step 4
    the archive, checking each file's hash as it is written. `data/` itself gets mode 0700.
 4. **Regroup**, if asked ([Regroup](#regroup)).
 5. **Record.** `Get` the record, set `ACTUAL_VERSION` and `ACTUAL_IMAGE_DIGEST` from the Backup's manifest, and
-   `Put` it. Every other key stays as it is: `HOSTNAME`, `STATE`, `CREATED_AT`, `UPGRADE_*` and Extra keys.
-6. **Compose.** `render.InstanceCompose` with the new image, the account's IDs and the `abyssctl` network's
-   subnets; `Store.WriteCompose`.
+   `Put` it. Every other key stays as it is: `HOSTNAME`, `STATE`, `INTERNET`, `CREATED_AT`, `UPGRADE_*` and Extra
+   keys, so the Instance keeps its current Internet access whatever the Backup's `instance.env` says.
+6. **Compose.** `render.InstanceCompose` with the new image, the account's IDs, the record's Internet access and
+   the subnets of each network it joins; `Store.WriteCompose`.
 7. **Start** if `STATE=running`: `ComposeUp` (`Wait`, 5 min), and once it succeeds write `TOOL_VERSION` =
    `Deps.Version`. With `STATE=stopped` nothing starts and `TOOL_VERSION` stays.
 8. **Clean up.** Delete `data.pre-restore/`. Event `restored instance=kids id=… regrouped=true`.
@@ -572,10 +574,12 @@ as root. Journey items run the real binary as root on an Ubuntu runner: this spe
 14. `Restore` calls, in order: verify, `Pull` (only when not local), `ComposeStop`, `Create(KindPreRestore)`
     (which does not start it), rename to `data.pre-restore/`, extract, Regroup, `Put`, `WriteCompose`, `ComposeUp`
     (only if `STATE=running`), `TOOL_VERSION`, delete `data.pre-restore/`; it verifies and pulls once; the record
-    keeps `HOSTNAME`, `STATE` and Extra keys and gets the Backup's version and digest; with `STATE=stopped`
+    keeps `HOSTNAME`, `STATE`, `INTERNET` and Extra keys and gets the Backup's version and digest, also when the
+    Backup was taken with the other Internet access; with `STATE=stopped`
     nothing starts and `TOOL_VERSION` is unchanged. → `TestRestore_Order`
 15. `PlanRestore` and `Restore` refuse with nothing changed: an unknown id, another Instance's id, a Backup failing
-    verification, a failed pull, no network, too little free space, and the guards. → `TestRestore_Refusals` (table)
+    verification, a failed pull, no `abyssctl` network, no `abyssctl-external` network for an Instance with
+    Internet access, too little free space, and the guards. → `TestRestore_Refusals` (table)
 16. When the `pre-restore` Backup fails, `Restore` starts again the container it stopped and changes nothing
     else. → `TestRestore_PreRestoreFails`
 17. `--latest` picks the newest Backup of any kind that passes verification, skipping a broken newer one. →

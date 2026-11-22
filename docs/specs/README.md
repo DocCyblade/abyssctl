@@ -93,7 +93,7 @@ what is compiled in. An unstamped development build refuses every other command 
 |---|---|
 | [Bootstrap](../../GLOSSARY.md) and Tool update | `host setup` (idempotent: a re-run fixes drift and changes settings given as flags, but refuses with exit 2 to change `--data-root` or `--base-domain`; installing a newer binary is a re-run of the new binary), `version` |
 | Proxy and Certificates | `cert install <cert.pem> <key.pem>`, `cert list`, `cert remove <id>`, `proxy upgrade [<version>]` |
-| Instance life | `create <name> [--hostname H] [--version X.Y.Z]`, `remove <name>`, `remove --orphan <name>`, `list`, `status`, `start`, `stop`, `restart` |
+| Instance life | `create <name> [--hostname H] [--version X.Y.Z] [--internet]`, `set <name> --internet=on\|off`, `remove <name>`, `remove --orphan <name>`, `list`, `status`, `start`, `stop`, `restart` |
 | Inside an Instance | `logs <name>` or `logs proxy` (`-f`, `--tail N`), `exec <name> [-- <cmd…>]`, `reset-password <name>` (interactive only) |
 | Upgrade | `upgrade <name> [<version>]` with automatic Rollback, `image prune` |
 | Backup | `backup <name>`, `backup --all`, `backup list`, `backup prune <name> --keep N [--kind K]`, and a nightly scheduled Backup of every Instance with [Retention](../../GLOSSARY.md): the timer runs `backup --all --scheduled`, which skips a locked Instance and logs it |
@@ -132,6 +132,11 @@ rethought.
   Pushover credentials may be shown masked as `…abcd` (for example in the `host setup` panel). `logs` and `exec`
   pass the container's output through unfiltered (it is the Operator's own data) and are never logged. The tool
   runs with `umask 077` and writes every file via temp file → chmod → rename.
+- **No [Internet access](../../GLOSSARY.md) unless the Operator turns it on.** Every Instance joins the
+  internal-only network `abyssctl`, so it is reached only through the Proxy and reaches nothing outside the Host.
+  An Instance with Internet access (`create --internet`, or `set <name> --internet=on`) also joins the ordinary
+  bridge network `abyssctl-external` and leaves through it. No Instance publishes a port. See
+  [ADR 0005](../adr/0005-internet-access-per-instance.md).
 - **Times.** Machine-facing times are UTC: file names, `--json`, Backup manifests, `outcomes.json`,
   `health.json` and `CREATED_AT`. Times people read are Host local time: progress lines (`HH:MM:SS`), tables,
   the MOTD and Alert text, with the zone abbreviation wherever a date is shown (`2026-11-17 03:00 EST`). The
@@ -171,13 +176,13 @@ the atomic file write) and `internal/op` (`Event` / `Emitter`, the typed errors,
 
 | Module (package) | Interface (gist; its spec owns the detail) | Hides |
 |---|---|---|
-| Docker (`docker`) | Compose up / stop / down / ps; container inspect, list by label and remove; image pull, inspect, list, remove; network create and inspect; `exec` with captured output and interactive passthrough; `run --rm`; Engine and Compose versions | the `docker` / `docker compose` CLI and its `--format json` output |
+| Docker (`docker`) | Compose up / stop / down / ps; container inspect, list by label and remove; image pull, inspect, list, remove; network create (bridge, optionally internal) and inspect (driver, internal, subnets); `exec` with captured output and interactive passthrough; `run --rm`; Engine and Compose versions | the `docker` / `docker compose` CLI and its `--format json` output |
 | Locks (`locks`) | `Acquire(path, wait)`, `TryAcquire(path)` | `flock` (the CLI passes the 30 s wait) |
 | Instance store (`store`) | `List`, `Get`, `Put`, `WriteCompose`, `CheckNew` / `Stage` / `Commit` / `Discard`, `Remove`, `Sweep`, outcomes | record parse, validate and write, folder layout, name rules, `.creating` folders, `outcomes.json` |
 | Renderer (`render`) | Instance `compose.yaml`, an Instance's site file (`Site(SiteInput)`), Caddyfile, Proxy `compose.yaml`, systemd units, MOTD script, logrotate rule | pure templates, no I/O |
-| Host (`host`) | `Setup(opts)`, `ReadSettings(paths)`, `SetPushover`, `Account()` | OS detection, Docker install and check, the system account, folders and modes, network, timers, MOTD script, logrotate, drift fixes (inspect → plan → apply); the only writer of `abyssctl.env` |
+| Host (`host`) | `Setup(opts)`, `ReadSettings(paths)`, `SetPushover`, `Account()` | OS detection, Docker install and check, the system account, folders and modes, the two networks, timers, MOTD script, logrotate, drift fixes (inspect → plan → apply); the only writer of `abyssctl.env` |
 | Proxy (`proxy`) | add and remove a site, install, list and remove Certificates, coverage, `Probe(ctx, hostname, path)`, Proxy upgrade to a version the caller resolved | write → validate → reload, Certificate choice and coverage, the Caddy container, `proxy.env` (its only writer), the Proxy upgrade target rule |
-| Lifecycle (`lifecycle`) | `Create` (given a resolved version and digest), `Remove`, `Start`, `Stop`, `Restart`, `Status`, `List`, logs, `exec`, `reset-password` | ordering, all-or-nothing `create`, final Backup on `remove`, wanted vs. actual state |
+| Lifecycle (`lifecycle`) | `Create` (given a resolved version and digest), `Set` (Internet access), `Remove`, `Start`, `Stop`, `Restart`, `Status`, `List`, logs, `exec`, `reset-password` | ordering, all-or-nothing `create`, final Backup on `remove`, wanted vs. actual state |
 | Backup (`backup`) | `Create`, `List`, `Prune`, `Restore`, `Revert`, `Finish`, `Interrupted`, `ParseID` | stop-copy-start, archive and manifest, verification, Retention, Regroup |
 | Versions (`versions`) | `Latest(repo)`, `Resolve(repo, version)`, image prune | registry tag lookups (anonymous bearer token), stable-version rules, finding unused images |
 | Upgrade (`upgrade`) | `Target(name, version)`, then `Upgrade(name, target, options)` | pre-flight → Backup → switch → verify → automatic Rollback; finishing an interrupted Upgrade |
@@ -238,7 +243,7 @@ numbered as in [testing.md](testing.md).
 |---|---|---|
 | `host setup`: Bootstrap, re-run, drift fixes | Host, Proxy, Renderer, Store, Docker | 1 Bootstrap |
 | Tool update, downgrade refusal, files out of date | Host, Store | 2 Tool update |
-| `create`, `remove`, `remove --orphan`, `list`, `status`, `start`, `stop`, `restart` | Lifecycle, Versions, Store, Renderer, Proxy, Backup, Docker | 3 Instance life |
+| `create`, `set`, `remove`, `remove --orphan`, `list`, `status`, `start`, `stop`, `restart` | Lifecycle, Versions, Store, Renderer, Proxy, Backup, Docker | 3 Instance life |
 | `logs`, `exec` | Lifecycle, Docker | 3 Instance life |
 | `reset-password` | Lifecycle, Docker | manual step in the Release check (needs a TTY) |
 | `cert install`, `cert list`, `cert remove`, `proxy upgrade` | Proxy, Renderer, Versions, Docker | 4 Proxy and Certificate |
@@ -299,7 +304,10 @@ its `data/`.
   `no-new-privileges`. There are no per-Instance accounts, and the Operator is not added to the `docker` group.
 - The Caddy Proxy runs as root inside its container, with `cap_drop: [ALL]`, `cap_add: [NET_BIND_SERVICE]`,
   `no-new-privileges` and `read_only: true`.
-- Only the Proxy publishes ports (80 and 443). Instances sit on the private network `abyssctl`.
+- Only the Proxy publishes ports (80 and 443). The Proxy joins both networks: `abyssctl`, to reach Instances, and
+  `abyssctl-external`, because Docker publishes ports only from a network that is not internal. Every Instance
+  sits on `abyssctl`; an Instance with Internet access also sits on `abyssctl-external`. The Proxy reaches an
+  Instance by its network alias.
 
 **Docker names:**
 
@@ -308,17 +316,19 @@ its `data/`.
 | Instance Compose project and container | `abyssctl-<name>`, also its network alias |
 | Instance label (finds [Orphans](../../GLOSSARY.md)) | `io.abyssctl.instance=<name>` |
 | Proxy Compose project and container | `abyssctl-proxy` (so `proxy` is a reserved Instance name, as are `all` and `removed`) |
-| Private network | `abyssctl` (subnet assigned by Docker, read back for `ACTUAL_TRUSTED_PROXIES`) |
+| Private network | `abyssctl`: bridge, internal (no internet); the Proxy and every Instance join it; subnet assigned by Docker, read back for `ACTUAL_TRUSTED_PROXIES` |
+| External network | `abyssctl-external`: bridge, not internal; the Proxy and each Instance with Internet access join it; subnet assigned by Docker, read back for `ACTUAL_TRUSTED_PROXIES` of an Instance with Internet access |
 
 ## Supported Hosts
 
 - Debian 13, Ubuntu 24.04 and 26.04, and TurnKey Core 19 (treated as its Debian base), each on amd64 and arm64,
   detected from `/etc/os-release`. `host setup` refuses anything else unless `--unsupported` is passed.
-- Docker Engine 24.0 or newer with Compose 2.24 or newer. If Docker is missing, `host setup` installs it from
+- Docker Engine 25.0.5 or newer with Compose 2.24 or newer. If Docker is missing, `host setup` installs it from
   Docker's official apt repository. An existing Docker that meets the minimums is used as is; `host setup` never
   upgrades Docker or edits `daemon.json`.
 - A shared Host is allowed. `host setup` refuses only on a concrete conflict: ports 80 or 443 in use, the
-  `abyssctl` network or Proxy name taken, or a non-empty Data root the tool doesn't own. Other containers and
+  `abyssctl` or `abyssctl-external` network name taken by a network of the wrong kind, the Proxy name taken, or a
+  non-empty Data root the tool doesn't own. Other containers and
   services get a warning.
 - Firewall, SSH, OS updates and Docker daemon hardening are left to the Operator. Rootless Docker and
   userns-remap are not supported.
@@ -338,7 +348,7 @@ interface in [backup.md](backup.md); `status` shows Problems and available updat
 | 4 | [render](render.md) | the Renderer and every generated file |
 | 5 | [proxy](proxy.md) | the Caddy Proxy, site files, Certificates and coverage, the probe, `cert` verbs, the Proxy upgrade operation (module and `cert` verb tests; the `proxy upgrade` verb lands with `versions`; its journey slices land with `host` and `lifecycle`) |
 | 6 | [host](host.md) | `host setup`: Bootstrap, settings, drift fixes, Tool update by re-run; wires the real Proxy and lands journey 1 |
-| 7 | [lifecycle](lifecycle.md) | `create`, `remove`, `list`, `status`, `start`, `stop`, `restart`, `logs`, `exec`, `reset-password`; lands journeys 2 and 3 |
+| 7 | [lifecycle](lifecycle.md) | `create`, `set`, `remove`, `list`, `status`, `start`, `stop`, `restart`, `logs`, `exec`, `reset-password`; lands journeys 2 and 3 |
 | 8 | [backup](backup.md) | Backup, Backup kinds, verification, Retention, Restore, Revert, Regroup |
 | 9 | [versions](versions.md) | latest stable Actual and Caddy versions, resolving a version to a digest, `image prune`, the `proxy upgrade` verb (wiring Proxy's upgrade, journey 4's upgrade step) |
 | 10 | [upgrade](upgrade.md) | Upgrade, verify, automatic Rollback, interrupted Upgrades |
@@ -357,3 +367,4 @@ interface in [backup.md](backup.md); `status` shows Problems and available updat
 | [0002](../adr/0002-instance-folder-is-the-record.md) | Each Instance's folder is its only record |
 | [0003](../adr/0003-single-static-go-binary.md) | The tool is one static Go binary |
 | [0004](../adr/0004-restore-regroups-offline.md) | Restore brings back the Backup's Actual version and Regroups offline |
+| [0005](../adr/0005-internet-access-per-instance.md) | Instances have no Internet access unless the Operator turns it on |

@@ -182,7 +182,7 @@ Then these H2 sections, in this order:
 |---|---|---|
 | What it does | About six bullets from the [v1 capabilities](README.md#v1-capabilities): several Instances on one Host behind one Proxy with the Operator's Certificates; all-or-nothing `create` and a final Backup on `remove`; Upgrade with a Backup first and automatic Rollback; nightly Backups with Retention, and a Restore that Regroups; a Health check with Pushover Alerts and the MOTD; a summary before each change, a confirmation before anything that stops a service or deletes or replaces data (see each verb's help), and `--dry-run`; one static binary | docs.md |
 | Requirements | Supported Hosts (Debian 13, Ubuntu 24.04 and 26.04, TurnKey Core 19; amd64 or arm64), root or a user with `sudo` (as root, drop the `sudo` from every command), ports 80 and 443 free, a Base domain with DNS pointing at the Host, the Operator's own Certificate | [host.md](host.md) |
-| | Docker Engine 24.0 and Compose 2.24 or newer; an existing Docker that meets them is used as is | [docker-and-locks.md](docker-and-locks.md) |
+| | Docker Engine 25.0.5 and Compose 2.24 or newer; an existing Docker that meets them is used as is | [docker-and-locks.md](docker-and-locks.md) |
 | | Or no Docker: `host setup` installs it from Docker's apt source | [host.md](host.md) |
 | | Outbound HTTPS to Docker Hub (`registry-1.docker.io` and `auth.docker.io` for lookups, plus Docker's download CDN for pulls) | [versions.md](versions.md) |
 | | Outbound HTTPS to `api.pushover.net` when Pushover is used | [alerts.md](alerts.md) |
@@ -290,6 +290,11 @@ first five lines and runs `host setup` with no flags, which keeps every setting.
 | | No generated file holds a Secret | [render.md](render.md) |
 | Containers | Instance containers run as the `abyssctl` account with every capability dropped and no published ports; the Proxy runs read-only with only `NET_BIND_SERVICE` | [render.md](render.md) |
 | | The Proxy's hardening; keys at 0600 root under `proxy/certs/`; no ACME and no outbound certificate traffic; access logs off; the Proxy listens on 80 and 443 on all interfaces | [proxy.md](proxy.md) |
+| Internet access | An Instance has no [Internet access](../../GLOSSARY.md) unless the Operator turns it on: it is only on the internal network `abyssctl` and publishes no port; with Internet access it also joins the ordinary bridge network `abyssctl-external` ([ADR 0005](../adr/0005-internet-access-per-instance.md)) | [render.md](render.md) |
+| | Bank sync needs it: `create <name> --internet`, or `set <name> --internet=on` for an existing Instance (`set <name> --internet=off` turns it off); a running Instance is recreated, a stopped one takes it at its next `start` | [lifecycle.md](lifecycle.md) |
+| | OpenID login and the plugin CORS proxy (`ACTUAL_CORS_PROXY_ENABLED`) need it too, even when the OpenID provider is on the LAN | [lifecycle.md](lifecycle.md) |
+| | Pinning the networks' subnets: create both before the first `host setup` (`docker network create --driver bridge --internal --subnet <cidr> abyssctl` and `docker network create --driver bridge --subnet <cidr> abyssctl-external`); `host setup` uses them as they are and refuses one of the wrong kind | [host.md](host.md) |
+| | Docker Engine 25.0.5 or newer is required, because older Engines answered external name lookups for containers on an internal network | [docker-and-locks.md](docker-and-locks.md) |
 | Backups and logs | Backups are unencrypted and root-only, as sensitive as Instance data; copy them off the Host with care | [backup.md](backup.md) |
 | | `upgrade-failed-*.log` files are root-only and may hold Instance data | [upgrade.md](upgrade.md) |
 | | The activity log is readable by the `adm` group and holds no Secrets | [cli.md](cli.md) |
@@ -315,7 +320,7 @@ The manual steps for removing Abyss from a Host, in this order. There is no `hos
 | Stop the timers | `systemctl disable --now` the Health check and Backup timers, so neither runs during the teardown | docs.md |
 | Remove each Instance | `remove` each Instance first; each takes a `final` Backup | [lifecycle.md](lifecycle.md) |
 | | An Instance's folder is `instances/<name>/`; a removed Instance's Backups are in `backups/removed/<name>-<stamp>/` until deleted by hand | [store.md](store.md) |
-| Remove the Proxy and network | Take the Proxy down from its `compose.yaml`, remove the `abyssctl` network and the Actual and Caddy images | [host.md](host.md) |
+| Remove the Proxy and networks | Take the Proxy down from its `compose.yaml`, remove the `abyssctl` and `abyssctl-external` networks and the Actual and Caddy images | [host.md](host.md) |
 | Remove the Host files | The four units, the MOTD script and the logrotate rule, then `systemctl daemon-reload` | [render.md](render.md) (owner), [host.md](host.md) (links) |
 | | `/etc/abyssctl/`, `/var/log/abyssctl/` and the binary | [host.md](host.md) |
 | Remove the account | The `abyssctl` system account and group | [host.md](host.md) |
@@ -338,7 +343,7 @@ rules every verb follows.
 | `create`: arguments, flags, the default Hostname, prompts and locks | [lifecycle.md](lifecycle.md) |
 | `create`: the Instance name rules (reserved `all`, `proxy`, `removed`) and Hostname rules | [store.md](store.md) |
 | `create`: the optional `--version` | [versions.md](versions.md) |
-| `remove`, `list`, `status`, `start`, `stop`, `restart`, `logs`, `exec`, `reset-password` | [lifecycle.md](lifecycle.md) |
+| `remove`, `list`, `status`, `start`, `stop`, `restart`, `set`, `logs`, `exec`, `reset-password` | [lifecycle.md](lifecycle.md) |
 | `upgrade` | [upgrade.md](upgrade.md) |
 | `image prune` | [versions.md](versions.md) |
 | `backup`, `backup list`, `backup prune`, `restore` | [backup.md](backup.md) |

@@ -183,6 +183,7 @@ of those runs. "At once" means the first run that sees it starts it.
 | `proxy_down` | `host` / `proxy` | Live | twice | first run the Proxy runs and answers | `abyssctl logs proxy`, or `abyssctl host setup` when it is not set up or its settings are invalid |
 | `instance_down` | name / name | Live | twice | first run it runs, or `STATE=stopped` | `abyssctl start <name>` |
 | `instance_unhealthy` | name / name | Live | twice | first good probe, or `STATE=stopped` | `abyssctl logs <name>` |
+| `network_mismatch` | name / name | Live | at once | the container's networks match the record, the container is gone, or `STATE=stopped` | `abyssctl restart <name>` |
 | `interrupted_upgrade` | name / name | Live | at once | `UPGRADE_BACKUP` cleared, or `rollback_failed` starts | `abyssctl upgrade <name>` |
 | `interrupted_restore` | name / name | Live | at once | `data.pre-restore/` gone | `abyssctl restore <name>` |
 | `invalid_record` | name / name | Live | at once | the record is valid | `abyssctl status` |
@@ -215,6 +216,7 @@ Each kind's `Text`, with its variants, and the phrase its Ended Alert uses:
 | `proxy_down` | `the Proxy is not set up` · `the Proxy's settings are invalid` · `the Proxy container is not running` · `nothing answers on port 443` | `Proxy up` |
 | `instance_down` | `down: no container` · `down: container <state>` (`exited (code 1)`, `restarting`, `paused`, `created`, `removing`, `dead`) | `down` |
 | `instance_unhealthy` | `not healthy: Docker reports its healthcheck failing` · `not healthy: /health through the Proxy answered <status>` · `not healthy: /health through the Proxy did not report "UP"` · `not healthy: the Proxy has no Certificate for <hostname>` · `not healthy: the Proxy served a Certificate that does not cover <hostname>` · `not healthy: /health through the Proxy did not answer in time` · `not healthy: /health through the Proxy failed` | `not healthy` |
+| `network_mismatch` | `on the wrong networks: on <networks>, its record says <networks>` (each list sorted and joined by `, `, `none` when empty) | `wrong networks` |
 | `interrupted_upgrade` | `an Upgrade was interrupted; the Instance needs it finished` | `interrupted Upgrade` |
 | `interrupted_restore` | `a Restore was interrupted; the Instance needs it finished` | `interrupted Restore` |
 | `invalid_record` | `the Instance record is invalid: line <n>: <text>`, or without `line <n>: ` for a problem on no line (line 0); `(and <m> more)` added for more problems | `invalid record` |
@@ -273,7 +275,10 @@ The CLI has read the settings, built the `Sender`, wired `Deps` and taken the he
       now, under the lock, not taken from step 2's list (a container a Backup stopped and started between the two
       would otherwise count as down). No container, or a `State` other than `running`, is an `instance_down`
       sighting. Running ends `instance_down`. An error is a `docker_down` sighting, and Docker is down from here
-      on.
+      on. When a container exists, the names in its `Networks` are compared with the networks its record says it
+      joins: `abyssctl`, plus `abyssctl-external` when the record has [Internet access](../../GLOSSARY.md)
+      ([ADR 0005](../adr/0005-internet-access-per-instance.md)). A difference is a `network_mismatch` sighting;
+      a match, or no container, ends it. Health only compares names: it opens no connection to test Internet access.
    7. **Probe.** A running container whose Docker `Health` is `unhealthy` is an `instance_unhealthy` sighting.
       Otherwise, while the Proxy is still up this run, `Proxy.Probe(ctx, rec.Hostname, "/health")`:
       `ErrUnreachable` is a `proxy_down` sighting ("nothing answers on port 443"), the Proxy is down for the rest
@@ -672,7 +677,9 @@ steps ([testing.md](testing.md)).
 1. Each Live Problem kind starts on the run its rule says, with its label, text, hint and `Since`: Docker down,
    Instance folders unreadable, Proxy not set up / invalid settings / not running / unreachable, no container and
    each non-running state (`removing` included), Docker healthcheck failing, interrupted Upgrade, interrupted
-   Restore, invalid record (with and without a line number), unreadable `outcomes.json` (no hint), Orphan, low disk
+   Restore, invalid record (with and without a line number), unreadable `outcomes.json` (no hint), a container
+   on networks that differ from its record's (both ways: missing `abyssctl-external`, and on it without Internet
+   access), Orphan, low disk
    and unreadable disk; texts that come from a failed look are the fixed sentences, and the look's error is only in
    the `look` event. → `TestCheck_LiveProblems` (table)
 2. Instance down, Instance unhealthy, Proxy down and Docker down start on the second failing run in a row with
@@ -783,6 +790,8 @@ steps ([testing.md](testing.md)).
     the MOTD shows "Alerts not delivered since"; the run after delivers it and the line goes. → journey 7
 34. Journey 7: `health clear kids` exits 0 and the MOTD no longer shows `backup_failed`; `health clear nosuch`
     exits 2. → journey 7
-35. Docs: the Health part of `docs/guides/alerts.md` and the `health check` and `health clear` reference pages say
+35. `network_mismatch` ends when the container's networks match its record again, when the container is gone and
+    when `STATE=stopped`, and `STATE=stopped` gives no `network_mismatch`. → `TestCheck_NetworkMismatch` (table)
+36. Docs: the Health part of `docs/guides/alerts.md` and the `health check` and `health clear` reference pages say
     what [Docs it changes](#8-docs-it-changes) lists. → (review); the reference pages also by the
     generated-reference check in CI

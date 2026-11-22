@@ -51,7 +51,7 @@ type ImagePin struct{ Version, Digest string } // Digest is "sha256:<64 hex>"
 
 type Pins struct {
     Caddy            ImagePin
-    DockerEngineMin  string // "24.0"
+    DockerEngineMin  string // "25.0.5"
     DockerComposeMin string // "2.24"
 }
 
@@ -514,7 +514,7 @@ from docs.md, ticketed here:    internal/cli/gendocs/, internal/docscheck/, LICE
   ```json
   {
     "caddy": { "version": "2.N.P", "digest": "sha256:<64 hex>" },
-    "docker_engine_min": "24.0",
+    "docker_engine_min": "25.0.5",
     "docker_compose_min": "2.24"
   }
   ```

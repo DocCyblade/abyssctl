@@ -217,7 +217,7 @@ A `host setup` flag left out keeps the current value; the first-run defaults are
 | `cert list` | | none | none | no | no | no | 0, 1, 2 | [proxy](proxy.md) |
 | `cert remove <id>` | `--dry-run`, `--yes` | Host | y/N | yes | no | yes | 0, 1, 2, 4 | [proxy](proxy.md) |
 | `proxy upgrade [<version>]` | `--dry-run`, `--yes` | Host | y/N | yes | no | yes | 0, 1, 2, 4 | [versions](versions.md), [proxy](proxy.md) |
-| `create <name>` | `--hostname H`, `--version X.Y.Z`, `--dry-run` | Host | panel | yes | no | yes | 0, 1, 2, 4 | [lifecycle](lifecycle.md) |
+| `create <name>` | `--hostname H`, `--version X.Y.Z`, `--internet`, `--dry-run` | Host | panel | yes | no | yes | 0, 1, 2, 4 | [lifecycle](lifecycle.md) |
 | `remove <name>` | `--dry-run`, `--yes` | Host, then Instance | typed name | yes | no | yes | 0, 1, 2, 4 | [lifecycle](lifecycle.md) |
 | `remove --orphan <name>` | `--dry-run`, `--yes` | Host | typed name | yes | no | yes | 0, 1, 2 | [lifecycle](lifecycle.md) |
 | `list` | `--json` | none | none | no | yes | no | 0, 1, 2 | [lifecycle](lifecycle.md) |
@@ -225,6 +225,7 @@ A `host setup` flag left out keeps the current value; the first-run defaults are
 | `start <name>` | | Host, then Instance; Host released after the site step | none | no | no | yes | 0, 1, 2, 4 | [lifecycle](lifecycle.md) |
 | `stop <name>` | `--dry-run`, `--yes` | Instance | y/N | yes | no | yes | 0, 1, 2, 4 | [lifecycle](lifecycle.md) |
 | `restart <name>` | `--dry-run`, `--yes` | Host, then Instance; Host released after the site step | y/N | yes | no | yes | 0, 1, 2, 4 | [lifecycle](lifecycle.md) |
+| `set <name>` | `--internet=on\|off` (required), `--dry-run`, `--yes` | Instance | y/N | yes | no | yes | 0, 1, 2, 4 | [lifecycle](lifecycle.md) |
 | `logs <name>`, `logs proxy` | `-f`/`--follow`, `--tail N` (default all) | none | none | no | no | no | 0, 1, 2 | [lifecycle](lifecycle.md) |
 | `exec <name> [-- <cmd…>]` | | none | none | no | no | command line and exit code, never I/O | the command's own; 1, 2 | [lifecycle](lifecycle.md) |
 | `reset-password <name>` | | Instance | the script's own, on a terminal | no | no | header and one event | 0, 1, 2, 4 | [lifecycle](lifecycle.md) |
@@ -260,7 +261,7 @@ The CLI takes every lock; modules state "caller holds X" and never lock, with th
 | `remove` | Host, then Instance | 30 s each |
 | `remove --orphan`, `cert install`, `cert remove`, `proxy upgrade` | Host | 30 s |
 | `alerts setup` | Host, after the test message, only to save | 30 s |
-| `stop`, `reset-password`, `upgrade`, `backup <name>`, `backup prune`, `restore` | Instance | 30 s |
+| `stop`, `set`, `reset-password`, `upgrade`, `backup <name>`, `backup prune`, `restore` | Instance | 30 s |
 | `backup --all` | each Instance in name order, one at a time, released before the next | 30 s each |
 | `backup --all --scheduled` | each Instance in name order, one at a time | none: `TryAcquire`, a busy one is skipped and logged |
 | `health check` | the health lock, holding nothing else; Instance locks by `TryAcquire` inside `Check` | 30 s by hand; `TryAcquire` with `--scheduled` |
@@ -400,7 +401,7 @@ the zone abbreviation too (`2026-11-17 03:00 EST`). Machine-facing times are UTC
 
 | Kind | Verbs | What the Operator does |
 |---|---|---|
-| y/N | `host setup`, `cert remove`, `proxy upgrade`, `stop`, `restart`, `upgrade`, `image prune`, `backup prune` | `? <Title>? (y/N)`: `y` or `yes`, any case, is yes; anything else, an empty line or end of input is no |
+| y/N | `host setup`, `cert remove`, `proxy upgrade`, `stop`, `restart`, `set`, `upgrade`, `image prune`, `backup prune` | `? <Title>? (y/N)`: `y` or `yes`, any case, is yes; anything else, an empty line or end of input is no |
 | typed name | `remove`, `remove --orphan`, `restore`, including `restore <name>` finishing an interrupted Restore | `? Type the Instance name to confirm (kids):` the exact name, nothing else |
 | pick list | `restore <name>` with no id and no `--latest`, on a TTY, when no Restore is interrupted | a numbered list of the Instance's Backups, newest first, then the panel and the typed name |
 | hidden input | `host setup --pushover-user` and `alerts setup` without `--pushover-token`, on a TTY | the Pushover token, echo off |
@@ -432,7 +433,8 @@ the zone abbreviation too (`2026-11-17 03:00 EST`). Machine-facing times are UTC
 ### `--dry-run`
 
 `--dry-run` is on every verb that shows a panel: `host setup`, `cert install`, `cert remove`, `proxy upgrade`,
-`create`, `remove`, `remove --orphan`, `stop`, `restart`, `upgrade`, `image prune`, `backup prune` and `restore`.
+`create`, `remove`, `remove --orphan`, `stop`, `restart`, `set`, `upgrade`, `image prune`, `backup prune` and
+`restore`.
 
 - It calls the `Plan…`, prints the panel and the outcome line `✓ Dry run: nothing changed`, and exits 0. It takes
   no lock, asks nothing, writes nothing, pulls nothing and is not logged.
@@ -586,6 +588,7 @@ Every key below is always present unless marked "omitted when empty". `…` stan
         "actual_version": "26.10.1",
         "actual_image_digest": "sha256:…",
         "state": "running",
+        "internet": false,
         "created_at": "2026-11-01T15:20:00Z",
         "tool_version": "0.3.0",
         "upgrade_backup": "",
@@ -597,7 +600,8 @@ Every key below is always present unless marked "omitted when empty". `…` stan
         "state": "running",
         "health": "healthy",
         "started_at": "2026-11-18T08:00:03Z",
-        "container_id": "4f1c…"
+        "container_id": "4f1c…",
+        "networks": ["abyssctl"]
       }
     }
   ],
@@ -607,7 +611,9 @@ Every key below is always present unless marked "omitted when empty". `…` stan
 
 `record` is `null` and `record_error` holds the problems, one sentence each joined by `; `, for an invalid record.
 `record.state` is what the Operator wants (`STATE`); `live.state` is Docker's, `""` with `exists: false`, and
-`started_at` is `null` when there is no container.
+`started_at` is `null` and `networks` is `[]` when there is no container. `record.internet` is the record's
+[Internet access](../../GLOSSARY.md) (`INTERNET=1`); `live.networks` is the networks the container is attached
+to, sorted.
 
 **`status`** (the `lifecycle.Report`):
 
@@ -623,6 +629,7 @@ Every key below is always present unless marked "omitted when empty". `…` stan
       "files_out_of_date": "",
       "written_by_newer": "",
       "interrupted": "",
+      "networks": "",
       "update_available": "26.11.0"
     }
   ],
@@ -888,8 +895,9 @@ on an Ubuntu runner.
 29. Each `--json` document is one object on stdout with `"schema": 1` first and `"warnings"` last, snake_case keys
     only, RFC 3339 UTC times with whole seconds, `null` only for absent times and records, and arrays never `null`.
     → `TestJSON_Envelope` (table over the five verbs, walking the decoded document)
-30. `version`, `list`, `status`, `backup list` and `health check` (a normal and a skipped run) match their schemas.
-    → `TestJSON_Schemas` (golden, one file each)
+30. `version`, `list`, `status`, `backup list` and `health check` (a normal and a skipped run) match their schemas;
+    `list` and `status` carry `record.internet` and `live.networks`, with one Instance with Internet access and one
+    without. → `TestJSON_Schemas` (golden, one file each)
 31. A verb with `--json` that fails writes nothing to stdout; `health check --json` with a current Problem writes
     its document and exits 1. → `TestJSON_OnFailure`
 

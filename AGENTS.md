@@ -19,9 +19,6 @@ here.
 - One spec at a time, in the overview's build order: `/to-tickets` on the spec, then `/implement-spec`. A module
   spec's tickets include its own CLI verb and journey slice, so each ticket is a vertical slice. `cli.md`,
   `testing.md` and the step-1 part of `docs.md` are ticketed with `foundation`, as the overview says.
-- **Open gate:** don't ticket `host` or `render` until the network-zones question
-  ([issue #1](https://github.com/DocCyblade/abyssctl/issues/1)) is settled with the Maintainer and the specs it
-  names are updated. Remove this line when it is.
 - **The seams are pre-agreed.** Each spec's Interface section and acceptance list are its test seams: build to
   them without asking. Internals the spec leaves open are the implementer's choice.
 - **Done** is the overview's "A spec is done", with two additions: each acceptance item's test has the name the

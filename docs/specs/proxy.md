@@ -10,7 +10,9 @@ adapter and locks are in [docker-and-locks.md](docker-and-locks.md); the files P
 Build the Proxy module (`internal/proxy`) and the verbs `cert install`, `cert list` and `cert remove`. The
 [Proxy](../../GLOSSARY.md) is one tool-owned Caddy container that owns ports 80 and 443 on all interfaces and sends
 each [Hostname](../../GLOSSARY.md) to its [Instance](../../GLOSSARY.md) over the private network `abyssctl`
-([ADR 0001](../adr/0001-tool-owned-caddy-proxy.md)). Proxy owns:
+([ADR 0001](../adr/0001-tool-owned-caddy-proxy.md)). The Proxy is also on the ordinary bridge network
+`abyssctl-external`, which publishing 80 and 443 needs, because `abyssctl` is internal
+([ADR 0005](../adr/0005-internet-access-per-instance.md)). Proxy owns:
 
 - the Proxy container: bringing it up ready, keeping its image, networks and published ports right, and
   recreating it only when its rendered `compose.yaml` changes or those drift;
@@ -60,8 +62,8 @@ func New(d Deps) *Proxy // fills each zero duration and an empty ProbeAddr with 
 func (p *Proxy) PlanEnsure(ctx context.Context) (op.Summary, error)
 
 // Ensure writes the Caddyfile, the Proxy compose.yaml and (only if missing) proxy.env from Pins.Caddy, pulls the
-// Proxy's image if it is not local, and brings the Proxy up, ready, on the abyssctl network with only 80 and 443
-// published. A changed Caddyfile is validated and reloaded; the container is recreated only when its compose.yaml
+// Proxy's image if it is not local, and brings the Proxy up, ready, on the abyssctl and abyssctl-external
+// networks with only 80 and 443 published. A changed Caddyfile is validated and reloaded; the container is recreated only when its compose.yaml
 // bytes change or its image, networks or published ports drift.
 func (p *Proxy) Ensure(ctx context.Context) error
 
@@ -215,7 +217,7 @@ Ensure runs on every `host setup`, so a first run, a re-run and a [Tool update](
    <v>; abyssctl proxy upgrade moves it to <pin>".
 2. **Render.** `render.Caddyfile()` and `render.ProxyCompose(image)`; compare each with the file on disk.
 3. **Inspect.** `Docker.Image(image)`, `Docker.Container(names.ProxyProject)`. Drift is a container whose image is
-   not `image`, whose `Networks` is not exactly `{abyssctl}`, or whose `Published` ports are not exactly TCP 80 and
+   not `image`, whose `Networks` is not exactly `{abyssctl, abyssctl-external}`, or whose `Published` ports are not exactly TCP 80 and
    443, each with a `HostIP` of `""`, `0.0.0.0` or `::`. `PlanEnsure` on a Host where Docker is missing
    (`ErrNotInstalled`, `ErrNoCompose`, `ErrDaemon`) or where `proxy/` does not exist yet treats it as "no image, no
    container" and returns the first-run steps, because `host setup` installs Docker and creates the folders before
@@ -448,7 +450,7 @@ Caddyfile, the site file and the Proxy `compose.yaml` are [render.md](render.md)
   `op.Row`, `op.Summary` and the typed errors; `buildinfo.Pins`, `buildinfo.CaddyRepo`,
   `buildinfo.CompareVersions`, `buildinfo.PlainVersion`.
 - [docker-and-locks](docker-and-locks.md): `docker.Client` (`Container`, `Image`, `Pull`, `ComposeUp`, `Exec`,
-  `Run`, `Logs`) and its error kinds, `docker/names` (`ProxyProject`, `Network`). Proxy does not import
+  `Run`, `Logs`) and its error kinds, `docker/names` (`ProxyProject`, `Network`, `ExternalNetwork`). Proxy does not import
   `internal/locks`.
 - [render](render.md): `Site`, `ParseSite`, `Caddyfile`, `ProxyCompose`.
 - Not Store and not Versions: callers pass Hostnames and the resolved Caddy version.
@@ -560,7 +562,7 @@ and its `proxy upgrade` step by versions.md's.
    caddy …` with the exact arguments, and the container keeps its ID; a validate or reload failure puts the old
    Caddyfile back and returns an error with Caddy's stderr; a deadline past `ReloadTimeout` is a failure too. →
    `TestEnsure_ReloadsCaddyfile`, `TestReload_UndoOnFailure`, `TestReload_Deadline`
-5. Changed compose bytes, a different image, a second network, an extra published port or one bound to
+5. Changed compose bytes, a different image, a third network, a missing `abyssctl-external`, an extra published port or one bound to
    `127.0.0.1` each plan "recreate the Proxy: every Instance unreachable for a few seconds" and call `ComposeUp`
    with `ForceRecreate`, giving a new container ID; ports on `""`, `0.0.0.0` and `::` are not drift; a stopped
    container plans "start the Proxy". → `TestPlanEnsure_Steps` (table), `TestEnsure_Recreate`
