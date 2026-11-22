@@ -169,6 +169,12 @@ deleted and runs step 7 against it: the log says `journey_client=built`, and the
 holds the tag. It then starts that registry again from the re-packed tar and runs step 7 once more: the log says
 `journey_client=cached`, and no `npm ci` runs.
 
+**`TestHarnessBlank`** checks `Blank` itself, before any journey relies on it. It seeds one of each item in
+[A blank Host](#a-blank-host): a labelled container, the `abyssctl-proxy` container, an `abyssctl-*` Compose
+project, both networks, an image of each stamped repo, the folders and files, the four units (enabled), the
+binary, and the `abyssctl` user and group. It then calls `Blank` and checks that every seeded item is gone, and
+that Docker, the local registry, `journey-client` and the `node` image are still there.
+
 ### Fakes and test helpers
 
 | Package | Stands in for | Used by | Owner |
@@ -260,8 +266,9 @@ deletes the Host's Abyss state. `make journey` passes the flag. Run it only on a
 1. `TestDockerContract`
 2. `TestRegistryContract`
 3. `TestJourneyClientCache`
-4. `TestJourney1Bootstrap` to `TestJourney8OutputContract`
-5. `TestNoHubPulls`
+4. `TestHarnessBlank`
+5. `TestJourney1Bootstrap` to `TestJourney8OutputContract`
+6. `TestNoHubPulls`
 
 `-test.run` picks one or a few. A failed journey doesn't stop the run, because each journey starts from a blank
 Host.
@@ -679,6 +686,7 @@ journey/
   harness_test.go       TestMain, H, Blank, Run, Golden, Mode, the failure collector  (build tag journey)
   contract_test.go      TestDockerContract, TestRegistryContract                       (build tag journey)
   client_cache_test.go  TestJourneyClientCache                                          (build tag journey)
+  blank_test.go         TestHarnessBlank                                                (build tag journey)
   j1_bootstrap_test.go … j8_output_test.go   one file per journey                       (build tag journey)
   normalise.go, normalise_test.go            Normalise, TestNormalise                    (no tag)
   pins.go, pins_test.go                      ReadPins, TestPins_Valid                    (no tag)
@@ -799,8 +807,8 @@ journey.
 5. `TestMain` refuses to start without `-journey.wipe`, without Docker at the minimums, or with a cache that does
    not serve every pinned digest. Each refusal comes with its message. → the harness start-up check, run by the
    journey jobs
-6. `Blank` leaves none of the items in [A blank Host](#a-blank-host), and fails the journey if one remains. →
-   checked at the start of every journey
+6. `Blank` leaves none of the items in [A blank Host](#a-blank-host), keeps what it should keep, and fails the
+   journey if one remains. → `TestHarnessBlank`, and checked at the start of every journey
 7. `dockertest.Contract` passes against the real Docker CLI with the fake image's tags. → `TestDockerContract`
 8. Versions against the local `registry:2` returns the digests Docker lists after a pull. → `TestRegistryContract`
 9. Journey 1 passes as written above. → `TestJourney1Bootstrap`
