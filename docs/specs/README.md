@@ -337,7 +337,10 @@ its `data/`.
 
 Steps 1–7 are the tracer bullet: by the end of `lifecycle`, a Host can be set up and an Instance created, reached
 through the Proxy and removed. `cli.md` and `testing.md` are ticketed with `foundation` and grow as each verb and
-journey lands. `lifecycle` builds the part of `backup.Create` that `remove` needs for its final Backup, to the
+journey lands; their step numbers mark when they are complete, not when they start. Each has a base that is built
+early: the parts that need `internal/locks` (the CLI's lock helper and busy-lock message) or
+`internal/docker/dockertest` (the journey harness) are blocked by `docker-and-locks`, and the whole base is done
+before `proxy`, whose `cert` verbs are the first to use panels, prompts, locks and the activity log. `lifecycle` builds the part of `backup.Create` that `remove` needs for its final Backup, to the
 interface in [backup.md](backup.md); `status` shows Problems and available updates once `health` lands.
 
 | # | Spec | Covers |
@@ -354,8 +357,8 @@ interface in [backup.md](backup.md); `status` shows Problems and available updat
 | 10 | [upgrade](upgrade.md) | Upgrade, verify, automatic Rollback, interrupted Upgrades |
 | 11 | [alerts](alerts.md) | `Send(alert)`, the Pushover Adapter, `alerts setup`, `alerts test` |
 | 12 | [health](health.md) | the Health check, Problems, `health.json`, `motd.txt`, `health check`, `health clear` |
-| 13 | [cli](cli.md) | ticketed with step 1: the verb table, output contract, confirmations, lock table, `--dry-run`, `--json` schemas, exit codes, activity log |
-| 14 | [testing](testing.md) | ticketed with step 1: the journey harness, the eight journeys, the fake Actual image, the test image cache, Makefile targets, journey CI |
+| 13 | [cli](cli.md) | ticketed with step 1, base built after step 2 and before step 5: the verb table, output contract, confirmations, lock table, `--dry-run`, `--json` schemas, exit codes, activity log |
+| 14 | [testing](testing.md) | ticketed with step 1, base built after step 2 and before step 5: the journey harness, the eight journeys, the fake Actual image, the test image cache, Makefile targets, journey CI |
 | 15 | [release](release.md) | the tag workflow, draft Release, Release check, repo-setup checklist |
 | 16 | [docs](docs.md) | README, the six guides, the generated reference, `LICENSE`, `SECURITY.md`, `CONTRIBUTING.md`, bug template (the generator, `make docs`/`docs-check`, its CI step, the docs tests, `LICENSE` and the guide and `CONTRIBUTING.md` skeletons are ticketed with step 1) |
 
