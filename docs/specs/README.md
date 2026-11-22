@@ -18,7 +18,7 @@ agents building Abyss are in [AGENTS.md](../../AGENTS.md); what comes after v1 i
 - **`cli.md` and `testing.md` hold only the shared conventions**: the verb table, output contract,
   confirmations, lock table, exit codes and `--json` schemas; the journey harness, test image cache, Makefile and
   CI. They are ticketed early, together with `foundation`, and grow as each verb and journey lands.
-- **Part of `docs.md` is ticketed with step 1**, from docs.md: the reference generator `internal/cli/gendocs`, `make docs` and `make docs-check`, the `ci.yml` step, `internal/docscheck` with `TestLinks` and the help tests, `LICENSE`, and H2 skeletons of the six guides and `CONTRIBUTING.md`. So every
+- **Part of `docs.md` is ticketed with step 1**, from docs.md: the reference generator `internal/cli/gendocs` with the help tests, `make docs` and `make docs-check`, the `ci.yml` step, `internal/docscheck` with `TestLinks` and the section tests, `LICENSE`, and H2 skeletons of the six guides and `CONTRIBUTING.md`. So every
   later spec's reference pages and links are checked from its first ticket; the rest of `docs.md` is the last
   step.
 - **Each spec's Interface section and acceptance list are the agreed test seams.** An implementer builds to

@@ -1,0 +1,8 @@
+{
+  "caddy": {
+    "version": "2.11.9",
+    "digest": "sha256:4851e54a46b206517c574821bb5cc67f170d2156041e9fbc4c9193b45e84a75b"
+  },
+  "docker_engine_min": "25.0.5",
+  "docker_compose_min": "2.24"
+}
