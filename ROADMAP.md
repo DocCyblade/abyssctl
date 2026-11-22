@@ -44,6 +44,9 @@ built, the spec that owns the seam it extends gains it (a new module gets its ow
 - **Actual settings.** Commands for Actual's own server settings, including OpenID and multi-user, with
   per-Instance settings kept in the Instance record as an allow-list of keys. Builds on: the Instance record
   ([store.md](docs/specs/store.md)) and the generated `compose.yaml` ([render.md](docs/specs/render.md)).
+- **Finer Internet access.** Let an Instance reach only the LAN (for an OpenID provider there) or a list of allowed
+  hosts, instead of the whole internet. In v1 [Internet access](GLOSSARY.md) is one yes/no. Needs firewall rules on
+  the Host. Builds on: [ADR 0005](docs/adr/0005-internet-access-per-instance.md).
 - **`doctor`.** Compares every Instance record with Docker and the disk, and reports what is out of step.
   Builds on: the Instance store ([store.md](docs/specs/store.md)) and `status`
   ([lifecycle.md](docs/specs/lifecycle.md)).

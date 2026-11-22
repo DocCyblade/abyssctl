@@ -37,6 +37,12 @@ The small file in an Instance's own folder that says the Instance exists and how
 It is the only record of an Instance. Everything else about the Instance is generated from it.
 _Avoid_: Registry, inventory, config (Actual has its own config)
 
+**Internet access**:
+Whether an Instance can open connections to the internet, which bank sync needs. An Instance
+without it can be reached only through the Proxy and can reach nothing outside the Host. It is
+off unless the Operator turns it on.
+_Avoid_: Zone (the time zone), egress, external
+
 **Orphan**:
 A container that looks like one of the tool's Instances but has no Instance record. The tool reports
 it and never removes it on its own.
