@@ -406,7 +406,7 @@ documented`, `labels: [bug]`:
 
 ### `LICENSE`
 
-The MIT license text, with the line `Copyright (c) 2026 DocCyblade`. It is in the repo from the first commit.
+The MIT license text, with the line `Copyright (c) 2026 Kenneth R. Robinson (DocCyblade)`. It is in the repo from the first commit.
 
 ### Makefile targets
 
@@ -494,7 +494,7 @@ Generator tests are in `internal/cli/gendocs`; repo docs tests are in `internal/
 10. The file set is as in [Files and formats](#4-files-and-formats-it-owns): `README.md`, `LICENSE`,
     `SECURITY.md`, `CONTRIBUTING.md`, both issue-template files and exactly the six guides exist; no
     `CHANGELOG.md`, code of conduct, pull-request template or feature-request template does. → `TestDocSet`
-11. `LICENSE` is the MIT text with `Copyright (c) 2026 DocCyblade`, and no `.go` file holds an SPDX or copyright
+11. `LICENSE` is the MIT text with `Copyright (c) 2026 Kenneth R. Robinson (DocCyblade)`, and no `.go` file holds an SPDX or copyright
     header. → `TestLicense`
 12. The README opens with the fixed text word for word, has the eight H2 sections in order, and its Documentation
     section links the six guides, `docs/reference/abyssctl.md`, `GLOSSARY.md`, `ROADMAP.md`, `CONTRIBUTING.md`,
