@@ -90,8 +90,8 @@ func PlainVersion(s string) bool
   before its release, and build metadata is ignored. It is the one comparison behind the downgrade refusal
   ([host.md](host.md)) and the exit 4 for an Instance whose `TOOL_VERSION` is newer than the binary
   ([cli.md](cli.md)).
-- **`CheckStamped`** rejects the unstamped default and any `Version` that is not valid SemVer; the CLI wraps its
-  error in `op.Refused`. A pre-release such as
+- **`CheckStamped`** rejects the unstamped default and any `Version` that is not valid SemVer; the CLI turns its
+  error into the stamped-build start-up refusal (§3). A pre-release such as
   `0.2.0-dev.3` is stamped and runs, so a developer can try a build on a test Host.
 - **`PlainVersion` is the one plain `X.Y.Z` rule** for Actual versions, the Caddy pin and `PROXY_VERSION`:
   `0.1.0` and `26.11.0` pass; `v26.11.0`, `26.11`, `26.011.0`, `26.11.0-rc1` and `26.11.0+b1` don't. Every
@@ -309,6 +309,8 @@ func (c *ManualClock) Advance(d time.Duration)
 - **Refused (2)** means nothing was changed: bad arguments, not root, an unstamped build, a declined or
   unconfirmed prompt, or a target the rules don't allow. A module returns `Refused` only before it has changed
   anything.
+- The two start-up refusals in §3 are not `op.Error`s: `internal/cli` returns them as start-up refusals, which
+  unwrap to `ErrRefused` (exit 2), and prints them as plain text exactly as §3 gives them.
 - **Rolled back (3)** means an Upgrade failed and the Instance is back on its old version and data
   ([upgrade.md](upgrade.md)).
 - **Needs the Operator (4)** means the tool stopped and won't go on by itself: a failed Rollback, an interrupted
@@ -389,15 +391,17 @@ production values are filled in ([cli.md](cli.md)).
    They read only what is compiled in, so the Operator can check a downloaded binary before giving it root. The
    exemption is a fixed list in `internal/cli`, not a per-command flag. Any later exemption must pass the same
    test: it reads nothing but what is compiled in.
-5. **Stamped-build check** (in the root command's `PersistentPreRunE`): `buildinfo.CheckStamped()`. An unstamped
-   or badly stamped build stops with exit 2 and, on stderr (with the binary's actual `Version`):
+5. **Stamped-build check** (in the root command's `PersistentPreRunE`): `buildinfo.CheckStamped()`. On an unstamped
+   or badly stamped build, the check returns a start-up refusal (exit 2) that prints exactly, on stderr (with the
+   binary's actual `Version`):
 
    ```
    abyssctl is an unstamped development build (<Version>) and won't act on a Host.
    Build it with: make build VERSION=X.Y.Z
    ```
 
-6. **Root check** (same hook): if `Env.Euid()` is not 0, stop with exit 2 and, on stderr:
+6. **Root check** (same hook): if `Env.Euid()` is not 0, the check returns a start-up refusal (exit 2) that
+   prints exactly, on stderr:
 
    ```
    abyssctl <command path> needs root. Run it with sudo.
