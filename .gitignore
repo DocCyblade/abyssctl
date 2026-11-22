@@ -51,6 +51,7 @@ bin/
 dist/
 
 # Test and profiling output
+junit.xml
 *.test
 *.out
 coverage.*
