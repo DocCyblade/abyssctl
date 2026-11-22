@@ -63,9 +63,14 @@ func checkCommand(root *cobra.Command, args []string) error {
 	return nil
 }
 
-// showError writes err to stderr in plain text: the message of a typed error and its hint, or the error itself.
-// cli.md's failure panel replaces this for errors after start-up.
+// showError writes err to stderr in plain text: a start-up refusal's text as is, the message of a typed error
+// and its hint, or the error itself. cli.md's failure panel replaces this for errors after start-up.
 func showError(w io.Writer, err error) {
+	var r startupRefusal
+	if errors.As(err, &r) {
+		_, _ = fmt.Fprintln(w, r.text)
+		return
+	}
 	var e *op.Error
 	if errors.As(err, &e) {
 		_, _ = fmt.Fprintln(w, e.Msg)
@@ -152,16 +157,23 @@ func startupChecks(cmd *cobra.Command, env Env) error {
 	if exempt[cmd.CommandPath()] {
 		return nil
 	}
-	if err := buildinfo.CheckStamped(); err != nil {
-		return op.Refused(fmt.Sprintf(
+	if buildinfo.CheckStamped() != nil {
+		return startupRefusal{fmt.Sprintf(
 			"abyssctl is an unstamped development build (%s) and won't act on a Host.\n"+
-				"Build it with: make build VERSION=X.Y.Z", buildinfo.Version)).WithCause(err)
+				"Build it with: make build VERSION=X.Y.Z", buildinfo.Version)}
 	}
 	if env.Euid() != 0 {
-		return op.Refused(cmd.CommandPath() + " needs root. Run it with sudo.")
+		return startupRefusal{cmd.CommandPath() + " needs root. Run it with sudo."}
 	}
 	return nil
 }
+
+// startupRefusal is the stamped-build or root refusal. It is not an op.Error: showError prints its text as is,
+// as foundation.md gives it, and it unwraps to op.ErrRefused, so it exits 2.
+type startupRefusal struct{ text string }
+
+func (r startupRefusal) Error() string { return r.text }
+func (r startupRefusal) Unwrap() error { return op.ErrRefused }
 
 // parseError wraps one of Cobra's parse errors as a refusal, with the command's help as the hint.
 func parseError(cmd *cobra.Command, err error) error {
