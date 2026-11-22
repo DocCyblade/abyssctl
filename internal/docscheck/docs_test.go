@@ -410,3 +410,49 @@ func TestContributing_Sections(t *testing.T) {
 		"Docs", "Pull requests", "Releases", "License",
 	})
 }
+
+var (
+	runStep  = regexp.MustCompile(`^\s*(?:-\s+)?run:\s*(\S.*?)\s*$`)
+	topLevel = regexp.MustCompile(`^(\S[^:]*):`)
+	onKey    = regexp.MustCompile(`^  (\w+):`)
+)
+
+// TestCI_RunsDocsCheck checks that the CI job runs make docs-check after make test, on every push and pull
+// request, so a stale reference page fails CI.
+func TestCI_RunsDocsCheck(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var triggers, runs []string
+	section := ""
+	for line := range strings.Lines(string(data)) {
+		line = strings.TrimRight(line, "\r\n")
+		if m := topLevel.FindStringSubmatch(line); m != nil {
+			section = m[1]
+			continue
+		}
+		if m := onKey.FindStringSubmatch(line); m != nil && section == "on" {
+			triggers = append(triggers, m[1])
+		}
+		if m := runStep.FindStringSubmatch(line); m != nil && section == "jobs" {
+			runs = append(runs, m[1])
+		}
+	}
+
+	for _, want := range []string{"push", "pull_request"} {
+		if !slices.Contains(triggers, want) {
+			t.Errorf("ci.yml does not run on %s; triggers %q", want, triggers)
+		}
+	}
+	test, check := slices.Index(runs, "make test"), slices.Index(runs, "make docs-check")
+	switch {
+	case test < 0:
+		t.Errorf("ci.yml has no make test step; steps %q", runs)
+	case check < 0:
+		t.Errorf("ci.yml has no make docs-check step; steps %q", runs)
+	case check < test:
+		t.Errorf("ci.yml runs make docs-check before make test; steps %q", runs)
+	}
+}

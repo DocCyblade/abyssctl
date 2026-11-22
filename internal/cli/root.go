@@ -95,11 +95,43 @@ func Main() int {
 // Root returns the command tree. It is also what the reference is generated from.
 func Root() *cobra.Command { return newRoot(Env{Euid: os.Geteuid}) }
 
+// rootLong is the root command's Long help, and so the synopsis of the reference's index page. cli.md owns what
+// it says.
+const rootLong = `Abyss runs several Actual Budget sync servers on one Docker Host. Each one is an Instance, with its
+own data, behind the one Proxy. Every command except version and help needs root: run it with sudo.
+
+Results go to stdout: tables, the --json document and the outcome line. Everything else goes to
+stderr: panels, prompts, progress lines, warnings and errors. Colour is used only on a terminal, and
+never when NO_COLOR is set to a non-empty value.
+
+A prompt is asked only on a terminal and never reads its answer from a pipe. Without a terminal, a
+command that would prompt needs --yes, or it is refused (exit 2) with nothing changed.
+
+Flags shared by verbs:
+
+    --dry-run  on every verb that shows a panel: show the plan, change nothing and exit 0
+    --yes      on every verb with a prompt: answer every y/N and typed-name prompt
+    --json     on version, list, status, backup list and health check: print one JSON document
+               on stdout; its "schema" field is 1, its fields are fixed from v1, and renaming or
+               removing one raises schema
+
+Exit codes (a few verbs differ, and their own help says how):
+
+    0  done, nothing to do, or a dry run
+    1  failed: Docker, disk, network, a lock not obtained in 30 s, or an unclassified error
+    2  refused before acting: nothing changed
+    3  an Upgrade failed and was rolled back: the Instance is fine on its old version
+    4  needs the Operator: fix what the message names by hand
+
+Every changing run, refused and failed attempts included, is recorded in the activity log,
+/var/log/abyssctl/abyssctl.log.`
+
 // newRoot builds the command tree for env.
 func newRoot(env Env) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "abyssctl",
 		Short:         "Run several Actual Budget sync servers on one Docker Host",
+		Long:          rootLong,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {

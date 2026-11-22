@@ -34,6 +34,11 @@ var importRules = []struct {
 	{"release imports only the standard library and internal/buildinfo", importsOnly(
 		mod+"/release", internal("buildinfo"))},
 	{"no package imports release", onlyImportedBy(under(mod + "/release"))},
+	{"internal/cli/gendocs imports only the standard library, Cobra, cobra/doc and internal/cli", importsOnly(
+		internal("cli/gendocs"), "github.com/spf13/cobra", "github.com/spf13/cobra/doc", internal("cli"))},
+	{"internal/docscheck imports only the standard library, test files included", testsImportOnlyStd(
+		internal("docscheck"))},
+	{"no package imports internal/docscheck", onlyImportedBy(under(internal("docscheck")))},
 }
 
 // TestImportRules checks importRules against `go list -deps -json ./...` of the repo.
@@ -68,7 +73,9 @@ type pkg struct {
 	ImportPath string
 	Standard   bool
 	Imports    []string
-	Module     *struct{ Path string }
+	// TestImports and XTestImports are the test files' imports; `go list -deps` doesn't load those packages.
+	TestImports, XTestImports []string
+	Module                    *struct{ Path string }
 }
 
 type graph struct {
@@ -106,6 +113,21 @@ func importsOnly(path string, allowed ...string) func(graph) []string {
 		var bad []string
 		for _, imp := range g.pkgs[path].Imports {
 			if !g.pkgs[imp].Standard && !slices.Contains(allowed, imp) {
+				bad = append(bad, path+" imports "+imp)
+			}
+		}
+		return bad
+	}
+}
+
+// testsImportOnlyStd fails when the package or its test files import anything outside the standard library. The
+// test files' imports aren't in the graph, so a standard-library path is told by its first element having no dot.
+func testsImportOnlyStd(path string) func(graph) []string {
+	return func(g graph) []string {
+		p := g.pkgs[path]
+		var bad []string
+		for _, imp := range slices.Concat(p.Imports, p.TestImports, p.XTestImports) {
+			if first, _, _ := strings.Cut(imp, "/"); strings.Contains(first, ".") {
 				bad = append(bad, path+" imports "+imp)
 			}
 		}

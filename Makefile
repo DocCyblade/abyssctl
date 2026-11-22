@@ -21,7 +21,7 @@ ifdef CI
 GOTESTSUM_FLAGS := --junitfile $(JUNIT_FILE)
 endif
 
-.PHONY: tools lint test build
+.PHONY: tools lint test build docs docs-check
 
 # `go install tool@version` ignores go.mod, so GOTOOLCHAIN pins the tools to the repo's toolchain: golangci-lint
 # refuses a module whose Go version is newer than the one it was built with.
@@ -40,3 +40,10 @@ build:
 	$(foreach arch,$(ARCHES),CGO_ENABLED=0 GOOS=linux GOARCH=$(arch) go build -trimpath \
 	  -ldflags "-s -w -X $(BI).Version=$(VERSION) -X $(BI).Commit=$(COMMIT) $(LDFLAGS_EXTRA)" \
 	  -o dist/abyssctl-linux-$(arch) ./cmd/abyssctl &&) true
+
+# The command reference, generated from the help text (docs.md). docs-check compares it and writes nothing.
+docs:
+	go run ./internal/cli/gendocs -out docs/reference
+
+docs-check:
+	go run ./internal/cli/gendocs -check docs/reference

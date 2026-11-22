@@ -15,7 +15,15 @@ func versionCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "version",
 		Short: "Show the version, commit, Go version, platform and Caddy pin of this binary",
-		Args:  cobra.NoArgs,
+		Long: `Shows the values compiled into this binary: its Abyss version, the commit it was built from, the Go
+version, the platform and the pinned Caddy version and digest.
+
+It needs no root, takes no lock, reads no file and makes no network or Docker call. It is not logged.
+
+With --json it prints the version document on stdout instead, with "schema": 1.`,
+		Example: `  abyssctl version
+  abyssctl version --json`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if asJSON {
 				return writeVersionJSON(cmd.OutOrStdout(), buildinfo.Current())
